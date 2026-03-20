@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+.idea/
+.claude/
+.DS_Store
+*.log
+CLAUDE.MD

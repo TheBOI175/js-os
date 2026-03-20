@@ -1,0 +1,17 @@
+{
+  "name": "js-os",
+  "version": "1.0.0",
+  "description": "Retro-styled OS with chat, terminal, and more",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.3",
+    "ws": "^8.19.0"
+  }
+}
