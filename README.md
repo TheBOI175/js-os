@@ -2,7 +2,27 @@
 
 A retro Windows 2000-inspired web OS built entirely from scratch with **no frameworks** — just native Node.js, WebSockets, and vanilla JavaScript.
 
-![JS OS](public/images/logo.png)
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/explorer.png" alt="File Explorer" width="500"><br>
+  <em>Retro file explorer with 4 working apps</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/chat.png" alt="JS Chat" width="500"><br>
+  <em>JS Chat — real-time messaging with image sharing</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/terminal.png" alt="Terminal" width="500"><br>
+  <em>Terminal — real shell sessions with tabs</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/call.png" alt="JS Call" width="500"><br>
+  <em>JS Call — WebRTC voice calls with mute/unmute</em>
+</p>
 
 ## Features
 
@@ -35,7 +55,6 @@ A retro Windows 2000-inspired web OS built entirely from scratch with **no frame
 js-chat/
 ├── server.js                  ← Node HTTP + WebSocket server
 ├── package.json
-├── CLAUDE.md                  ← Project context for AI assistants
 └── public/
     ├── index.html             ← HTML structure
     ├── sw.js                  ← Service worker for push notifications
@@ -59,7 +78,7 @@ js-chat/
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/js-chat.git
+git clone https://github.com/TheBOI175/js-chat.git
 cd js-chat
 
 # Install dependencies (needs a C compiler for node-pty)
