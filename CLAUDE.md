@@ -6,17 +6,17 @@ Aarav is Laksh's son. This is a **personal/hobby project** — prioritize fun, s
 
 ## Project History
 
-Started as **PHP Chat**, moved to **Node.js with WebSockets**. Terminal app was replaced with **JS Note** (music composer) on 2026-03-20. Production hardening added same day. The folder is `js-chat`.
+Started as **PHP Chat**, moved to **Node.js with WebSockets**. Terminal app was replaced with **JS Note** (music composer) on 2026-03-20, then JS Note was replaced with **Gemma AI** (Google Gemini API) on 2026-03-21. Production hardening added on 2026-03-20. The folder is `js-chat`.
 
 ## Stack & Architecture
 
-**No frameworks.** Native Node.js HTTP server + `ws` + `ioredis` (optional Redis). That's it.
+**No frameworks.** Native Node.js HTTP server + `ws` + `ioredis` (Redis). Gemini API for AI (just an API key, no extra deps). That's it.
 
 ### File Structure
 ```
 js-chat/
 ├── CLAUDE.md
-├── server.js              ← HTTP + WebSocket server (chat, call, JSTube API)
+├── server.js              ← HTTP + WebSocket server (chat, call, JSTube API, AI proxy)
 ├── package.json           ← deps: ws, ioredis
 ├── package-lock.json
 └── public/
@@ -37,13 +37,18 @@ js-chat/
 
 ### Server (`server.js`)
 
-- **HTTP**: Static files from `public/` + `/health` endpoint + `/api/search` (JSTube)
+- **HTTP**: Static files from `public/` + `/health` endpoint + `/api/search` (JSTube) + AI endpoints
 - **Two WebSocket servers** (noServer + upgrade routing):
   - `ws://host/` — Chat (rooms with create/join/broadcast)
   - `ws://host/call` — Call signaling (WebRTC)
+- **AI endpoints** (proxy to Google Gemini):
+  - `GET /api/ai/status` — check AI status
+  - `GET /api/ai/models` — list available models
+  - `POST /api/ai/chat` — stream AI response as SSE (Server-Sent Events)
 - **Production features**: Rate limiting (token bucket per IP), connection limits (100K global, 50/IP), WebSocket heartbeat (30s ping/pong), broadcast backpressure (>1MB skip), graceful shutdown (SIGTERM/SIGINT)
-- **Redis** (optional): pub/sub for cross-instance chat/call sync, username uniqueness via keys with 2hr TTL. Activate with `REDIS_HOST=127.0.0.1`
-- **Logging**: ANSI colored pretty logs or JSON mode (`LOG_FORMAT=json`). Categories: `SERVER`, `HTTP`, `WS`, `CHAT`, `CALL`, `JSTUBE`, `REDIS`
+- **Redis** (required): pub/sub for cross-instance chat/call sync, username uniqueness via keys with 2hr TTL. `REDIS_HOST` must be set or server refuses to start
+- **Gemini AI** (required): `GEMINI_API_KEY` must be set or server refuses to start. Free key from aistudio.google.com. Model configurable via `GEMINI_MODEL` (default: gemini-2.5-flash)
+- **Logging**: ANSI colored pretty logs or JSON mode (`LOG_FORMAT=json`). Categories: `SERVER`, `HTTP`, `WS`, `CHAT`, `CALL`, `JSTUBE`, `AI`, `REDIS`
 
 ### Client (`public/js/app.js`) — OOP Classes
 
@@ -53,12 +58,11 @@ js-chat/
 - **`WindowManager`** — Window open/close with CSS animations
 - **`ChatClient`** — WebSocket chat with create/join/message/disconnect
 - **`CallClient`** — WebRTC voice calls with mesh peer connections
-- **`MusicSynthesizer`** — Web Audio API with 6 realistic instruments:
-  - Piano (multi-harmonic), Guitar (Karplus-Strong), Violin (sawtooth+vibrato), Flute (sine+breath noise), Trumpet (5 brass harmonics), Music Box (detuned shimmer)
-- **`StaffManager`** — Canvas staff notation with infinite scroll, multi-track, playback, seek, metronome, WAV export, localStorage auto-save
+- **`GemmaClient`** — HTTP streaming to Gemini API via SSE, with AbortController for cancellation
+- **`ConversationStore`** — localStorage persistence for AI conversation histories
 - **`JSTubeManager`** — YouTube search + iframe embed player
 - **`BaseApp`** — Abstract base class for all apps
-- **`JSChatApp`**, **`MusicMakerApp`**, **`JSTubeApp`**, **`JSCallApp`** — App subclasses
+- **`JSChatApp`**, **`GemmaApp`**, **`JSTubeApp`**, **`JSCallApp`** — App subclasses
 - **`Desktop`** — Main orchestrator, config system, splash screen, error dialogs
 
 ### Global Config (`public/js/config.js`)
@@ -67,7 +71,7 @@ js-chat/
 window.JSOS_CONFIG = {
     os:   'JS OS',
     chat: 'JS Chat',
-    note: 'JS Note',
+    ai:   'Gemma',
     tube: 'JSTube',
     call: 'JS Call',
 };
@@ -85,7 +89,7 @@ Change names here → they propagate everywhere via `data-name` attributes.
 
 ### Apps (4 total)
 1. **JS Chat** — Room-based chat with image sharing, user panel, status bar
-2. **JS Note** — Music composer with staff notation, multi-track, infinite scroll, WAV export, localStorage save/resume
+2. **Gemma AI** — AI chat powered by Google Gemini with streaming responses, code blocks, conversation history, message editing
 3. **JSTube** — YouTube search + embedded player
 4. **JS Call** — WebRTC voice calls with mute/unmute
 
@@ -96,7 +100,7 @@ Change names here → they propagate everywhere via `data-name` attributes.
 
 ## Rules & Preferences
 
-1. **No frameworks** — native Node + ws + ioredis only
+1. **No frameworks** — native Node + ws + ioredis only (Gemini is just a fetch call)
 2. **Aesthetics are sacred** — don't touch visuals without asking
 3. **OOP** — client code uses classes, follow existing pattern
 4. **Separated files** — HTML/CSS/JS in their folders
@@ -109,17 +113,21 @@ Change names here → they propagate everywhere via `data-name` attributes.
 ## How to Run
 
 ```bash
-cd ~/Desktop/js-chat
+cd ~/Desktop/js-os
 npm start
 ```
 
 Opens at **http://localhost:8080** (configurable via `PORT` env var).
 
-With Redis: `REDIS_HOST=127.0.0.1 npm start`
+Both Redis and Gemini are required:
+```bash
+GEMINI_API_KEY=your-key-here REDIS_HOST=127.0.0.1 npm start
+```
+Or just add them to `.env` and run `npm start`.
 
 ## Deployment
 
 - **Cloudflare** for domain/CDN
-- **Redis** (Upstash free tier or self-hosted) for multi-instance scaling
+- **Redis** (required — Upstash free tier or self-hosted)
+- **Gemini API key** (required — free from aistudio.google.com)
 - Server handles: rate limiting, connection limits, heartbeat, backpressure, graceful shutdown
-- 96 automated tests passing

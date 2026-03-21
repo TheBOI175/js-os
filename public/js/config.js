@@ -3,7 +3,7 @@
 window.JSOS_CONFIG = {
     os:   'JS OS',
     chat: 'JS Chat',
-    note: 'JS Note',
+    ai:   'Gemma',
     tube: 'JS Tube',
     call: 'JS Call',
 };

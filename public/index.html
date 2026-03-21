@@ -59,14 +59,13 @@
                         <div class="file-icon-img app-js">{ }</div>
                         <div class="file-icon-label" data-name="chat">JS Chat</div>
                     </div>
-                    <div class="file-icon" id="music-icon">
+                    <div class="file-icon" id="ai-icon">
                         <div class="file-icon-img" style="background: linear-gradient(135deg, #F7DF1E, #a89610); box-shadow: 0 3px 10px rgba(247,223,30,0.3);">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="#323330" stroke-width="1.5" stroke-linecap="round">
-                                <line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="11" x2="20" y2="11"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="4" y1="17" x2="20" y2="17"/><line x1="4" y1="20" x2="20" y2="20"/>
-                                <ellipse cx="10" cy="17" rx="2.5" ry="2" fill="#323330"/><line x1="12.5" y1="17" x2="12.5" y2="6" stroke-width="2"/><path d="M12.5 6 L18 4.5 L18 8 L12.5 9.5" fill="#323330" stroke="#323330" stroke-width="1"/>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#323330" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5Z" fill="#323330"/>
                             </svg>
                         </div>
-                        <div class="file-icon-label" data-name="note">JS Note</div>
+                        <div class="file-icon-label" data-name="ai">Gemma</div>
                     </div>
                     <div class="file-icon" id="jstube-icon">
                         <div class="file-icon-img" style="background: linear-gradient(135deg, #F7DF1E, #a89610); box-shadow: 0 3px 10px rgba(247,223,30,0.3);">
@@ -164,10 +163,10 @@
             </div>
         </div>
 
-        <!-- JS Note Window (hidden initially) -->
-        <div class="window music-app" id="music-window">
+        <!-- Gemma AI Window (hidden initially) -->
+        <div class="window ai-app" id="ai-window">
             <div class="titlebar">
-                <span id="music-title" data-name="note" data-name-prefix="&#9834; ">&#9834; JS Note</span>
+                <span id="ai-title" data-name="ai" data-name-prefix="&#10024; ">&#10024; Gemma</span>
                 <div>
                     <button class="window-btn btn-minimize" data-action="minimize" title="Minimize">&ndash;</button>
                     <button class="window-btn btn-maximize" data-action="maximize" title="Maximize">&square;</button>
@@ -175,80 +174,38 @@
                 </div>
             </div>
 
-            <!-- Name lobby -->
-            <div id="music-lobby">
-                <div class="lobby">
-                    <label for="music-name-input">Name your composition:</label>
-                    <input type="text" id="music-name-input" placeholder="Untitled" maxlength="50">
-                    <div style="margin-top: 25px;">
-                        <button class="lobby-btn" id="music-start-btn">Start Composing</button>
-                    </div>
-                    <div id="music-saved-list" style="margin-top: 20px;"></div>
-                </div>
-            </div>
-
-            <!-- Editor (hidden until name is set) -->
-            <div id="music-editor" style="display:none;">
-                <div class="music-toolbar">
-                    <label class="music-toolbar-label">Tempo:</label>
-                    <input type="range" id="music-tempo" min="60" max="240" value="120" class="music-slider">
-                    <span id="music-tempo-label" class="music-toolbar-value">120</span>
-                    <span class="music-toolbar-label">BPM</span>
-                    <label class="music-toolbar-label" style="margin-left:12px;">Vol:</label>
-                    <input type="range" id="music-master-vol" min="0" max="100" value="80" class="music-slider music-slider-short">
-                    <button id="music-loop-btn" class="music-toolbar-btn-toggle" title="Loop">Loop</button>
-                    <button id="music-metro-btn" class="music-toolbar-btn-toggle" title="Metronome">Metro</button>
-                    <button id="music-export-btn" class="music-toolbar-btn-toggle" title="Export audio">Export</button>
-                    <button id="music-clear-btn" class="music-toolbar-btn" title="Clear track">Clear</button>
-                </div>
-                <div class="music-track-tabs" id="music-track-tabs">
-                    <button class="music-track-tab active" data-track="0">Track 1 <span class="music-track-x" data-track="0">&times;</span></button>
-                    <button class="music-track-tab-add" id="music-add-track" title="Add track">+</button>
-                </div>
-                <div class="music-track-controls">
-                    <label class="music-toolbar-label">Instrument:</label>
-                    <select id="music-instrument" class="music-select">
-                        <option value="piano">Piano</option>
-                        <option value="guitar">Guitar</option>
-                        <option value="violin">Violin</option>
-                        <option value="flute">Flute</option>
-                        <option value="trumpet">Trumpet</option>
-                        <option value="musicbox">Music Box</option>
-                    </select>
-                    <label class="music-toolbar-label" style="margin-left:8px;">Vol:</label>
-                    <input type="range" id="music-track-vol" min="0" max="100" value="80" class="music-slider music-slider-short">
-                    <button id="music-mute-btn" class="music-toolbar-btn-toggle" title="Mute">Mute</button>
-                    <span class="music-toolbar-label" style="margin-left:auto;">Note:</span>
-                    <select id="music-note-type" class="music-select">
-                        <option value="quarter">&#9833; Quarter</option>
-                        <option value="half">&#119070; Half</option>
-                        <option value="whole">&#9675; Whole</option>
-                        <option value="eighth">&#9834; Eighth</option>
-                    </select>
-                    <button id="music-eraser-btn" class="music-toolbar-btn-toggle" title="Eraser mode">Eraser</button>
-                </div>
-                <div class="music-body">
-                    <div class="music-canvas-scroll" id="music-canvas-scroll">
-                        <canvas id="music-canvas"></canvas>
+            <!-- Conversation lobby -->
+            <div id="ai-lobby">
+                <div class="ai-lobby-bar">
+                    <span class="ai-lobby-title">My Conversations</span>
+                    <div class="ai-lobby-actions">
+                        <button class="ai-lib-btn ai-lib-btn-add" id="ai-new-btn" title="New conversation">+</button>
+                        <button class="ai-lib-btn ai-lib-btn-del" id="ai-del-btn" title="Delete selected" disabled>&minus;</button>
                     </div>
                 </div>
-                <div class="music-seek-bar">
-                    <input type="range" id="music-seek" min="0" max="64" value="0" step="0.5" class="music-seek-slider" title="Drag to seek">
-                </div>
-                <div class="music-controls">
-                    <button class="music-ctrl-btn" id="music-rewind" title="Rewind">&#9198;</button>
-                    <button class="music-ctrl-btn" id="music-skip-back" title="Previous measure">&#9664;&#9664;</button>
-                    <button class="music-ctrl-btn" id="music-play" title="Play">&#9654;</button>
-                    <button class="music-ctrl-btn" id="music-pause" title="Pause" disabled>&#10074;&#10074;</button>
-                    <button class="music-ctrl-btn" id="music-stop" title="Stop" disabled>&#9632;</button>
-                    <button class="music-ctrl-btn" id="music-skip-fwd" title="Next measure">&#9654;&#9654;</button>
-                    <span class="music-position" id="music-position">Ready</span>
-                </div>
+                <div class="ai-conv-list" id="ai-conv-list"></div>
             </div>
 
-            <div class="chat-statusbar" id="music-statusbar">
-                <span id="music-status-instrument">Track 1: Piano</span>
-                <span class="status-right" id="music-note-count">0 notes</span>
+            <!-- Chat view (hidden until conversation opened) -->
+            <div id="ai-chat" style="display:none;">
+                <div class="ai-chat-header">
+                    <button id="ai-back-btn" class="ai-back-btn" title="Back to conversations">&#9664; Back</button>
+                    <span class="ai-conv-title" id="ai-conv-title">Conversation</span>
+                </div>
+                <div class="ai-messages" id="ai-messages"></div>
+                <button class="ai-stop-btn" id="ai-stop-btn" style="display:none;">Stop generating</button>
+                <form class="input-area" id="ai-form">
+                    <table width="100%"><tr>
+                        <td style="font-size: 14px; color: #F7DF1E; font-weight: bold;">Ask:</td>
+                        <td style="width: 100%;"><input type="text" id="ai-input" placeholder="Ask Gemma anything..." required style="width: 100%;" autocomplete="off"></td>
+                        <td><button type="submit" class="send-btn" id="ai-send-btn">Send</button></td>
+                    </tr></table>
+                </form>
+            </div>
+
+            <div class="chat-statusbar" id="ai-statusbar">
+                <span>&#10024; Gemma AI</span>
+                <span class="status-right" id="ai-status-text">Ready</span>
             </div>
         </div>
 

@@ -23,7 +23,7 @@ const ANSI = {
 };
 const LOG_COLORS = {
     SERVER: ANSI.green, HTTP: ANSI.gray, WS: ANSI.cyan,
-    CHAT: ANSI.yellow, CALL: ANSI.magenta, JSTUBE: ANSI.cyan, REDIS: ANSI.red,
+    CHAT: ANSI.yellow, CALL: ANSI.magenta, JSTUBE: ANSI.cyan, AI: ANSI.cyan, REDIS: ANSI.red,
 };
 
 function log(category, msg, data) {
@@ -41,43 +41,56 @@ function log(category, msg, data) {
     }
 }
 
-// ─── Redis (optional — graceful fallback if unavailable) ───
+// ─── Gemini AI (required) ───
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+if (!GEMINI_API_KEY) {
+    console.error('\n  ERROR: GEMINI_API_KEY is required.\n  Get a free key from https://aistudio.google.com\n  Then run: GEMINI_API_KEY=your-key npm start\n  Or add it to your .env file.\n');
+    process.exit(1);
+}
+
+// ─── Redis (required) ───
 let Redis;
 try { Redis = require('ioredis'); } catch { Redis = null; }
+
+if (!Redis) {
+    console.error('\n  ERROR: ioredis package is missing.\n  Run: npm install\n');
+    process.exit(1);
+}
+
+if (!process.env.REDIS_HOST) {
+    console.error('\n  ERROR: REDIS_HOST is required.\n  Redis is needed for username uniqueness, room sync, and scaling.\n\n  Quick start (local):  REDIS_HOST=127.0.0.1 npm start\n  Or add to your .env:  REDIS_HOST=127.0.0.1\n\n  Free hosted Redis:    https://upstash.com (no credit card)\n');
+    process.exit(1);
+}
 
 let redis = null;
 let redisSub = null;
 let redisReady = false;
 
 async function initRedis() {
-    if (!Redis || !process.env.REDIS_HOST) {
-        return;
-    }
+    const opts = {
+        host: process.env.REDIS_HOST,
+        port: parseInt(process.env.REDIS_PORT) || 6379,
+        password: process.env.REDIS_PASSWORD || undefined,
+        lazyConnect: true,
+        retryStrategy: (times) => Math.min(times * 1000, 30000),
+    };
+    redis = new Redis(opts);
+    redisSub = new Redis(opts);
+
+    redis.on('ready', () => { redisReady = true; log('REDIS', 'Connected'); });
+    redis.on('error', () => { if (redisReady) { redisReady = false; log('REDIS', 'Connection lost'); } });
+    redis.on('close', () => { redisReady = false; });
+
+    redisSub.on('error', () => {});
+    redisSub.on('message', handleRedisMessage);
+
     try {
-        const opts = {
-            host: process.env.REDIS_HOST || '127.0.0.1',
-            port: parseInt(process.env.REDIS_PORT) || 6379,
-            password: process.env.REDIS_PASSWORD || undefined,
-            lazyConnect: true,
-            retryStrategy: (times) => Math.min(times * 1000, 30000),
-        };
-        redis = new Redis(opts);
-        redisSub = new Redis(opts);
-
-        redis.on('ready', () => { redisReady = true; log('REDIS', 'Connected'); });
-        redis.on('error', () => { if (redisReady) { redisReady = false; log('REDIS', 'Connection lost'); } });
-        redis.on('close', () => { redisReady = false; });
-
-        redisSub.on('error', () => {});
-        redisSub.on('message', handleRedisMessage);
-
         await redis.connect();
         await redisSub.connect();
     } catch (err) {
-        log('REDIS', 'Not available — running in standalone mode (' + err.message + ')');
-        redis = null;
-        redisSub = null;
-        redisReady = false;
+        console.error('\n  ERROR: Could not connect to Redis at ' + process.env.REDIS_HOST + ':' + (process.env.REDIS_PORT || '6379') + '\n  ' + err.message + '\n\n  Make sure Redis is running:\n    macOS:   brew services start redis\n    Linux:   sudo systemctl start redis\n    Docker:  docker run -p 6379:6379 redis\n');
+        process.exit(1);
     }
 }
 
@@ -358,6 +371,87 @@ const server = http.createServer(async (req, res) => {
             log('JSTUBE', `Search error: ${err.message}`);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+    }
+
+    // ─── AI Status ───
+    if (req.url === '/api/ai/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', model: GEMINI_MODEL }));
+        return;
+    }
+
+    // ─── AI Chat (streaming SSE via Gemini API) ───
+    if (req.url === '/api/ai/chat' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        let parsed;
+        try { parsed = JSON.parse(body); } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            return;
+        }
+        const { messages } = parsed;
+        if (!messages || !Array.isArray(messages)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'messages array required' }));
+            return;
+        }
+        log('AI', `Chat: ${messages.length} messages, model=${GEMINI_MODEL}`);
+
+        // Convert messages to Gemini format
+        const geminiContents = messages.map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }],
+        }));
+
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        });
+
+        try {
+            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+            const geminiRes = await fetch(geminiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: geminiContents }),
+                signal: AbortSignal.timeout(60000),
+            });
+
+            if (!geminiRes.ok) {
+                const err = await geminiRes.text();
+                throw new Error('Gemini API error: ' + geminiRes.status + ' ' + err.slice(0, 200));
+            }
+
+            // Stream Gemini SSE response to client
+            const reader = geminiRes.body;
+            let buffer = '';
+            for await (const chunk of reader) {
+                if (res.destroyed) break;
+                buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const payload = line.slice(6).trim();
+                    if (!payload) continue;
+                    try {
+                        const data = JSON.parse(payload);
+                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                        if (text) res.write('data: ' + JSON.stringify({ content: text }) + '\n\n');
+                    } catch {}
+                }
+            }
+            res.write('data: [DONE]\n\n');
+            res.end();
+            log('AI', 'Chat response completed');
+        } catch (err) {
+            log('AI', 'Chat error: ' + err.message);
+            res.write('data: ' + JSON.stringify({ error: err.message }) + '\n\n');
+            res.end();
         }
         return;
     }

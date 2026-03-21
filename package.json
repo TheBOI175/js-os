@@ -1,7 +1,7 @@
 {
   "name": "js-os",
   "version": "1.0.0",
-  "description": "Retro-styled web OS with chat, music maker, video, and voice calls",
+  "description": "Retro Windows 2000-style web OS with chat, AI (Gemini), video, and voice calls",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
