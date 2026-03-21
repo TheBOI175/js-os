@@ -4,9 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <link rel="icon" type="image/png" href="images/logo.png">
-    <link rel="stylesheet" href="lib/xterm.min.css">
     <link rel="stylesheet" href="css/style.css">
-    <title>JS OS</title>
+    <title data-name="os">JS OS</title>
 </head>
 
 <body>
@@ -21,7 +20,7 @@
     <!-- Splash screen -->
     <div id="splash">
         <img class="splash-logo" src="images/logo.png" alt="JS OS">
-        <div class="splash-title">JS OS</div>
+        <div class="splash-title" data-name="os">JS OS</div>
         <div class="splash-subtitle">Click anywhere to enter</div>
     </div>
 
@@ -58,15 +57,16 @@
                 <div class="explorer-files">
                     <div class="file-icon" id="app-icon">
                         <div class="file-icon-img app-js">{ }</div>
-                        <div class="file-icon-label">JS Chat</div>
+                        <div class="file-icon-label" data-name="chat">JS Chat</div>
                     </div>
-                    <div class="file-icon" id="terminal-icon">
-                        <div class="file-icon-img" style="background: linear-gradient(135deg, #3b3b38, #1e1e1e); box-shadow: 0 3px 10px rgba(0,0,0,0.3);">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="#F7DF1E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+                    <div class="file-icon" id="music-icon">
+                        <div class="file-icon-img" style="background: linear-gradient(135deg, #F7DF1E, #a89610); box-shadow: 0 3px 10px rgba(247,223,30,0.3);">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#323330" stroke-width="1.5" stroke-linecap="round">
+                                <line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="11" x2="20" y2="11"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="4" y1="17" x2="20" y2="17"/><line x1="4" y1="20" x2="20" y2="20"/>
+                                <ellipse cx="10" cy="17" rx="2.5" ry="2" fill="#323330"/><line x1="12.5" y1="17" x2="12.5" y2="6" stroke-width="2"/><path d="M12.5 6 L18 4.5 L18 8 L12.5 9.5" fill="#323330" stroke="#323330" stroke-width="1"/>
                             </svg>
                         </div>
-                        <div class="file-icon-label">Terminal</div>
+                        <div class="file-icon-label" data-name="note">JS Note</div>
                     </div>
                     <div class="file-icon" id="jstube-icon">
                         <div class="file-icon-img" style="background: linear-gradient(135deg, #F7DF1E, #a89610); box-shadow: 0 3px 10px rgba(247,223,30,0.3);">
@@ -74,7 +74,7 @@
                                 <rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8" fill="#323330"/>
                             </svg>
                         </div>
-                        <div class="file-icon-label">JSTube</div>
+                        <div class="file-icon-label" data-name="tube">JSTube</div>
                     </div>
                     <div class="file-icon" id="call-icon">
                         <div class="file-icon-img" style="background: linear-gradient(135deg, #F7DF1E, #a89610); box-shadow: 0 3px 10px rgba(247,223,30,0.3);">
@@ -82,7 +82,7 @@
                                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
                             </svg>
                         </div>
-                        <div class="file-icon-label">JS Call</div>
+                        <div class="file-icon-label" data-name="call">JS Call</div>
                     </div>
                 </div>
             </div>
@@ -95,7 +95,7 @@
         <!-- Chat App Window (hidden initially) -->
         <div class="window chat-app" id="chat-window">
             <div class="titlebar">
-                <span id="window-title">{ } JS Chat</span>
+                <span id="window-title" data-name="chat" data-name-prefix="{ } ">{ } JS Chat</span>
                 <div>
                     <button class="window-btn btn-minimize" data-action="minimize" title="Minimize">&ndash;</button>
                     <button class="window-btn btn-maximize" data-action="maximize" title="Maximize">&square;</button>
@@ -104,7 +104,7 @@
             </div>
             <div class="top-bar">
                 <table width="100%"><tr>
-                    <td><span style="color: #F7DF1E; font-size: 22px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">JS Chat</span></td>
+                    <td><span data-name="chat" style="color: #F7DF1E; font-size: 22px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">JS Chat</span></td>
                     <td align="right" style="color: #e0e0e0; font-size: 13px;">Welcome! | <a href="#">Help</a> | <a href="#">About</a></td>
                 </tr></table>
             </div>
@@ -164,26 +164,98 @@
             </div>
         </div>
 
-        <!-- Terminal Window (hidden initially) -->
-        <div class="window terminal-app" id="terminal-window">
+        <!-- JS Note Window (hidden initially) -->
+        <div class="window music-app" id="music-window">
             <div class="titlebar">
-                <span id="terminal-title">Terminal</span>
+                <span id="music-title" data-name="note" data-name-prefix="&#9834; ">&#9834; JS Note</span>
                 <div>
                     <button class="window-btn btn-minimize" data-action="minimize" title="Minimize">&ndash;</button>
                     <button class="window-btn btn-maximize" data-action="maximize" title="Maximize">&square;</button>
                     <button class="window-btn btn-close" data-action="close" title="Close">&times;</button>
                 </div>
             </div>
-            <div class="terminal-tabs" id="terminal-tabs">
-                <button class="terminal-tab-new" id="terminal-new-tab" title="New tab">+</button>
+
+            <!-- Name lobby -->
+            <div id="music-lobby">
+                <div class="lobby">
+                    <label for="music-name-input">Name your composition:</label>
+                    <input type="text" id="music-name-input" placeholder="Untitled" maxlength="50">
+                    <div style="margin-top: 25px;">
+                        <button class="lobby-btn" id="music-start-btn">Start Composing</button>
+                    </div>
+                    <div id="music-saved-list" style="margin-top: 20px;"></div>
+                </div>
             </div>
-            <div class="terminal-panes" id="terminal-panes"></div>
+
+            <!-- Editor (hidden until name is set) -->
+            <div id="music-editor" style="display:none;">
+                <div class="music-toolbar">
+                    <label class="music-toolbar-label">Tempo:</label>
+                    <input type="range" id="music-tempo" min="60" max="240" value="120" class="music-slider">
+                    <span id="music-tempo-label" class="music-toolbar-value">120</span>
+                    <span class="music-toolbar-label">BPM</span>
+                    <label class="music-toolbar-label" style="margin-left:12px;">Vol:</label>
+                    <input type="range" id="music-master-vol" min="0" max="100" value="80" class="music-slider music-slider-short">
+                    <button id="music-loop-btn" class="music-toolbar-btn-toggle" title="Loop">Loop</button>
+                    <button id="music-metro-btn" class="music-toolbar-btn-toggle" title="Metronome">Metro</button>
+                    <button id="music-export-btn" class="music-toolbar-btn-toggle" title="Export audio">Export</button>
+                    <button id="music-clear-btn" class="music-toolbar-btn" title="Clear track">Clear</button>
+                </div>
+                <div class="music-track-tabs" id="music-track-tabs">
+                    <button class="music-track-tab active" data-track="0">Track 1 <span class="music-track-x" data-track="0">&times;</span></button>
+                    <button class="music-track-tab-add" id="music-add-track" title="Add track">+</button>
+                </div>
+                <div class="music-track-controls">
+                    <label class="music-toolbar-label">Instrument:</label>
+                    <select id="music-instrument" class="music-select">
+                        <option value="piano">Piano</option>
+                        <option value="guitar">Guitar</option>
+                        <option value="violin">Violin</option>
+                        <option value="flute">Flute</option>
+                        <option value="trumpet">Trumpet</option>
+                        <option value="musicbox">Music Box</option>
+                    </select>
+                    <label class="music-toolbar-label" style="margin-left:8px;">Vol:</label>
+                    <input type="range" id="music-track-vol" min="0" max="100" value="80" class="music-slider music-slider-short">
+                    <button id="music-mute-btn" class="music-toolbar-btn-toggle" title="Mute">Mute</button>
+                    <span class="music-toolbar-label" style="margin-left:auto;">Note:</span>
+                    <select id="music-note-type" class="music-select">
+                        <option value="quarter">&#9833; Quarter</option>
+                        <option value="half">&#119070; Half</option>
+                        <option value="whole">&#9675; Whole</option>
+                        <option value="eighth">&#9834; Eighth</option>
+                    </select>
+                    <button id="music-eraser-btn" class="music-toolbar-btn-toggle" title="Eraser mode">Eraser</button>
+                </div>
+                <div class="music-body">
+                    <div class="music-canvas-scroll" id="music-canvas-scroll">
+                        <canvas id="music-canvas"></canvas>
+                    </div>
+                </div>
+                <div class="music-seek-bar">
+                    <input type="range" id="music-seek" min="0" max="64" value="0" step="0.5" class="music-seek-slider" title="Drag to seek">
+                </div>
+                <div class="music-controls">
+                    <button class="music-ctrl-btn" id="music-rewind" title="Rewind">&#9198;</button>
+                    <button class="music-ctrl-btn" id="music-skip-back" title="Previous measure">&#9664;&#9664;</button>
+                    <button class="music-ctrl-btn" id="music-play" title="Play">&#9654;</button>
+                    <button class="music-ctrl-btn" id="music-pause" title="Pause" disabled>&#10074;&#10074;</button>
+                    <button class="music-ctrl-btn" id="music-stop" title="Stop" disabled>&#9632;</button>
+                    <button class="music-ctrl-btn" id="music-skip-fwd" title="Next measure">&#9654;&#9654;</button>
+                    <span class="music-position" id="music-position">Ready</span>
+                </div>
+            </div>
+
+            <div class="chat-statusbar" id="music-statusbar">
+                <span id="music-status-instrument">Track 1: Piano</span>
+                <span class="status-right" id="music-note-count">0 notes</span>
+            </div>
         </div>
 
         <!-- JSTube Window (hidden initially) -->
         <div class="window jstube-app" id="jstube-window">
             <div class="titlebar">
-                <span id="jstube-title">JSTube</span>
+                <span id="jstube-title" data-name="tube">JSTube</span>
                 <div>
                     <button class="window-btn btn-minimize" data-action="minimize" title="Minimize">&ndash;</button>
                     <button class="window-btn btn-maximize" data-action="maximize" title="Maximize">&square;</button>
@@ -192,7 +264,7 @@
             </div>
             <div class="top-bar">
                 <form id="jstube-search-form" style="display: flex; align-items: center; gap: 8px; width: 100%;">
-                    <span style="color: #F7DF1E; font-size: 18px; font-weight: bold;">JSTube</span>
+                    <span data-name="tube" style="color: #F7DF1E; font-size: 18px; font-weight: bold;">JSTube</span>
                     <input type="text" id="jstube-search" placeholder="Search videos..." style="flex:1; background:#1e1e1e; border:2px inset #555; color:#e0e0e0; font-family:Tahoma,sans-serif; font-size:13px; padding:5px 10px; border-radius:3px;">
                     <button type="submit" class="send-btn" style="padding:5px 14px; font-size:12px;">Search</button>
                 </form>
@@ -220,7 +292,7 @@
         <!-- JS Call Window (hidden initially) -->
         <div class="window call-app" id="call-window">
             <div class="titlebar">
-                <span id="call-title">JS Call</span>
+                <span id="call-title" data-name="call">JS Call</span>
                 <div>
                     <button class="window-btn btn-minimize" data-action="minimize" title="Minimize">&ndash;</button>
                     <button class="window-btn btn-maximize" data-action="maximize" title="Maximize">&square;</button>
@@ -229,7 +301,7 @@
             </div>
             <div class="top-bar">
                 <table width="100%"><tr>
-                    <td><span style="color: #F7DF1E; font-size: 22px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">JS Call</span></td>
+                    <td><span data-name="call" style="color: #F7DF1E; font-size: 22px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">JS Call</span></td>
                     <td align="right" style="color: #e0e0e0; font-size: 13px;">Voice Chat</td>
                 </tr></table>
             </div>
@@ -289,8 +361,7 @@
 
     </div>
 
-    <script src="lib/xterm.min.js"></script>
-    <script src="lib/addon-fit.min.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/app.js"></script>
 </body>
 

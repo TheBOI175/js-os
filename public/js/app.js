@@ -8,7 +8,7 @@ class Logger {
     static LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, OFF: 4 };
     static COLORS = {
         DESKTOP: '#F7DF1E', WINDOW: '#c9b518', SOUND: '#c678dd', NOTIFY: '#61afef',
-        CHAT: '#98c379', CALL: '#56b6c2', TERMINAL: '#e06c75', JSTUBE: '#c97a7a',
+        CHAT: '#98c379', CALL: '#56b6c2', MUSIC: '#e06c75', JSTUBE: '#c97a7a',
         WS: '#e0e0e0', WEBRTC: '#c678dd', IMAGE: '#F7DF1E', APP: '#F7DF1E',
     };
 
@@ -70,8 +70,7 @@ class NotificationManager {
         this.swReg.active.postMessage({ type: 'NOTIFY', title, body, tag });
         log.debug('NOTIFY', 'Sent:', title, '-', body);
     }
-    chatMessage(username, text) { this.notify('JS Chat', username + ': ' + text, 'chat'); }
-    terminalActivity(text) { this.notify('Terminal', text, 'terminal'); }
+    chatMessage(username, text) { this.notify(window.JSOS_CONFIG?.chat || 'JS Chat', username + ': ' + text, 'chat'); }
 }
 
 // ─── Utility: WindowManager ───
@@ -251,58 +250,758 @@ class CallClient {
     }
 }
 
-// ─── Terminal theme constant ───
-const TERM_THEME = {
-    background: '#1e1e1e', foreground: '#e0e0e0', cursor: '#F7DF1E', cursorAccent: '#1e1e1e',
-    selectionBackground: 'rgba(247, 223, 30, 0.25)',
-    black: '#1e1e1e', red: '#c97a7a', green: '#98c379', yellow: '#F7DF1E',
-    blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#e0e0e0',
-    brightBlack: '#555', brightRed: '#e06c75', brightGreen: '#98c379', brightYellow: '#F7DF1E',
-    brightBlue: '#61afef', brightMagenta: '#c678dd', brightCyan: '#56b6c2', brightWhite: '#ffffff',
-};
+// ─── MusicSynthesizer (realistic Web Audio synthesis) ───
+class MusicSynthesizer {
+    constructor() {
+        this.ctx = null;
+        this._activeNodes = [];
+    }
 
-// ─── TerminalSessionManager (manages tabbed pty sessions) ───
-class TerminalSessionManager {
-    constructor(panesEl, tabsEl, newTabBtn) {
-        this.panesEl = panesEl; this.tabsEl = tabsEl; this.newTabBtn = newTabBtn;
-        this.sessions = new Map(); this._nextId = 1; this._activeId = null;
-        this.newTabBtn.addEventListener('click', () => this.addTab());
+    _ensureCtx() {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.ctx.state === 'suspended') this.ctx.resume();
     }
-    open() { log.info('TERMINAL', 'Opening first tab'); this.addTab(); }
-    addTab() {
-        const id = this._nextId++; log.info('TERMINAL', 'Creating tab', id);
-        const paneEl = document.createElement('div'); paneEl.className = 'terminal-pane'; this.panesEl.appendChild(paneEl);
-        const tabEl = document.createElement('div'); tabEl.className = 'terminal-tab';
-        tabEl.innerHTML = '<span class="terminal-tab-label">Shell ' + id + '</span><span class="terminal-tab-close">&times;</span>';
-        this.tabsEl.insertBefore(tabEl, this.newTabBtn);
-        tabEl.querySelector('.terminal-tab-label').addEventListener('click', () => this.switchTab(id));
-        tabEl.querySelector('.terminal-tab-close').addEventListener('click', (e) => { e.stopPropagation(); this.closeTab(id); });
-        const xterm = new window.Terminal({ theme: TERM_THEME, fontFamily: "'Courier New', monospace", fontSize: 14, cursorBlink: true, scrollback: 1000 });
-        const fitAddon = new window.FitAddon.FitAddon(); xterm.loadAddon(fitAddon); xterm.open(paneEl);
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(protocol + '//' + location.host + '/terminal');
-        ws.onopen = () => { const d = fitAddon.proposeDimensions(); if (d) ws.send('\x01' + JSON.stringify({ cols: d.cols, rows: d.rows })); };
-        ws.onmessage = (e) => { xterm.write(e.data); };
-        ws.onclose = () => { xterm.write('\r\n\x1b[33m[Connection closed]\x1b[0m\r\n'); };
-        xterm.onData((data) => { if (ws?.readyState === 1) ws.send(data); });
-        const ro = new ResizeObserver(() => { fitAddon.fit(); const d = fitAddon.proposeDimensions(); if (d && ws?.readyState === 1) ws.send('\x01' + JSON.stringify({ cols: d.cols, rows: d.rows })); });
-        ro.observe(paneEl);
-        this.sessions.set(id, { xterm, fitAddon, ws, paneEl, tabEl, ro }); this.switchTab(id); log.debug('TERMINAL', 'Tab', id, 'ready'); return id;
+
+    playNote(frequency, durationSec, instrumentName, startTime, volume) {
+        this._ensureCtx();
+        const t = startTime || this.ctx.currentTime;
+        const vol = volume !== undefined ? volume : 0.4;
+        const method = '_play_' + (instrumentName || 'piano');
+        if (this[method]) this[method](frequency, durationSec, t, vol);
+        else this._play_piano(frequency, durationSec, t, vol);
     }
-    switchTab(id) {
-        const s = this.sessions.get(id); if (!s) return;
-        for (const [, v] of this.sessions) { v.paneEl.classList.remove('active'); v.tabEl.classList.remove('active'); }
-        s.paneEl.classList.add('active'); s.tabEl.classList.add('active');
-        this._activeId = id; s.fitAddon.fit(); s.xterm.focus();
+
+    // Piano: layered harmonics with percussive hammer feel
+    _play_piano(freq, dur, t, vol) {
+        const master = this.ctx.createGain();
+        master.connect(this.ctx.destination);
+        const harmonics = [{ r: 1, a: 1 }, { r: 2, a: 0.4 }, { r: 3, a: 0.15 }, { r: 4, a: 0.07 }];
+        for (const h of harmonics) {
+            const osc = this.ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq * h.r;
+            osc.detune.value = (Math.random() - 0.5) * 4; // slight detuning for richness
+            const g = this.ctx.createGain();
+            const hVol = vol * h.a;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(hVol, t + 0.005);
+            g.gain.exponentialRampToValueAtTime(hVol * 0.3, t + 0.15);
+            g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+            osc.connect(g); g.connect(master);
+            osc.start(t); osc.stop(t + dur + 0.05);
+            this._track(osc);
+        }
     }
-    closeTab(id) {
-        const s = this.sessions.get(id); if (!s) return;
-        log.info('TERMINAL', 'Closing tab', id);
-        s.ro.disconnect(); if (s.ws) s.ws.close(); s.xterm.dispose(); s.paneEl.remove(); s.tabEl.remove(); this.sessions.delete(id);
-        if (this._activeId === id) { const r = [...this.sessions.keys()]; if (r.length) this.switchTab(r[r.length - 1]); }
+
+    // Guitar: Karplus-Strong plucked string synthesis
+    _play_guitar(freq, dur, t, vol) {
+        const ctx = this.ctx;
+        const sampleRate = ctx.sampleRate;
+        const period = Math.round(sampleRate / freq);
+        const bufLen = Math.max(Math.round(sampleRate * dur * 1.2), period * 2);
+        const buf = ctx.createBuffer(1, bufLen, sampleRate);
+        const data = buf.getChannelData(0);
+        // Fill first period with noise burst
+        for (let i = 0; i < period; i++) data[i] = (Math.random() * 2 - 1) * 0.8;
+        // Karplus-Strong: average adjacent samples with slight damping
+        const decay = 0.996;
+        for (let i = period; i < bufLen; i++) {
+            data[i] = (data[i - period] + data[i - period + 1]) * 0.5 * decay;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(vol, t);
+        g.gain.linearRampToValueAtTime(0.001, t + dur);
+        src.connect(g); g.connect(ctx.destination);
+        src.start(t); src.stop(t + dur + 0.1);
+        this._track(src);
     }
-    focus() { const s = this.sessions.get(this._activeId); if (s) s.xterm.focus(); }
-    closeAll() { log.info('TERMINAL', 'Closing all', this.sessions.size, 'tabs'); for (const id of [...this.sessions.keys()]) this.closeTab(id); this._nextId = 1; }
+
+    // Violin: rich sawtooth harmonics with slow attack and vibrato
+    _play_violin(freq, dur, t, vol) {
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.value = freq;
+        // Vibrato
+        const lfo = this.ctx.createOscillator();
+        const lfoG = this.ctx.createGain();
+        lfo.frequency.value = 5.5;
+        lfoG.gain.value = 4;
+        lfo.connect(lfoG); lfoG.connect(osc.frequency);
+        lfo.start(t); lfo.stop(t + dur + 0.2);
+        // Gentle lowpass for warmth
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = freq * 4;
+        filter.Q.value = 1;
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol * 0.6, t + 0.12);
+        g.gain.setValueAtTime(vol * 0.6, t + dur - 0.1);
+        g.gain.linearRampToValueAtTime(0, t + dur);
+        osc.connect(filter); filter.connect(g); g.connect(this.ctx.destination);
+        osc.start(t); osc.stop(t + dur + 0.1);
+        this._track(osc);
+    }
+
+    // Flute: sine + breath noise
+    _play_flute(freq, dur, t, vol) {
+        const ctx = this.ctx;
+        // Pure tone
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol * 0.5, t + 0.06);
+        g.gain.setValueAtTime(vol * 0.5, t + dur - 0.08);
+        g.gain.linearRampToValueAtTime(0, t + dur);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(t); osc.stop(t + dur + 0.1);
+        // Breath noise
+        const noiseLen = Math.round(ctx.sampleRate * dur);
+        const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+        const nd = noiseBuf.getChannelData(0);
+        for (let i = 0; i < noiseLen; i++) nd[i] = (Math.random() * 2 - 1);
+        const nSrc = ctx.createBufferSource();
+        nSrc.buffer = noiseBuf;
+        const nFilter = ctx.createBiquadFilter();
+        nFilter.type = 'bandpass';
+        nFilter.frequency.value = freq;
+        nFilter.Q.value = 8;
+        const nGain = ctx.createGain();
+        nGain.gain.setValueAtTime(0, t);
+        nGain.gain.linearRampToValueAtTime(vol * 0.06, t + 0.03);
+        nGain.gain.setValueAtTime(vol * 0.06, t + dur - 0.05);
+        nGain.gain.linearRampToValueAtTime(0, t + dur);
+        nSrc.connect(nFilter); nFilter.connect(nGain); nGain.connect(ctx.destination);
+        nSrc.start(t); nSrc.stop(t + dur + 0.1);
+        this._track(osc);
+    }
+
+    // Trumpet: bright brass with multiple harmonics
+    _play_trumpet(freq, dur, t, vol) {
+        const master = this.ctx.createGain();
+        master.connect(this.ctx.destination);
+        const harmonics = [{ r: 1, a: 1 }, { r: 2, a: 0.7 }, { r: 3, a: 0.5 }, { r: 4, a: 0.3 }, { r: 5, a: 0.15 }];
+        for (const h of harmonics) {
+            const osc = this.ctx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.frequency.value = freq * h.r;
+            const g = this.ctx.createGain();
+            const hVol = vol * h.a * 0.15;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(hVol, t + 0.04);
+            g.gain.setValueAtTime(hVol * 0.8, t + dur - 0.06);
+            g.gain.linearRampToValueAtTime(0, t + dur);
+            osc.connect(g); g.connect(master);
+            osc.start(t); osc.stop(t + dur + 0.1);
+            this._track(osc);
+        }
+    }
+
+    // Music Box: pure shimmer with detuned copy
+    _play_musicbox(freq, dur, t, vol) {
+        for (const detune of [0, 6]) {
+            const osc = this.ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            osc.detune.value = detune;
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(vol * 0.4, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + Math.min(dur, 1.5));
+            osc.connect(g); g.connect(this.ctx.destination);
+            osc.start(t); osc.stop(t + dur + 0.1);
+            this._track(osc);
+        }
+    }
+
+    // Metronome click
+    playClick(downbeat) {
+        this._ensureCtx();
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = downbeat ? 1000 : 800;
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(downbeat ? 0.3 : 0.15, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+        osc.connect(g); g.connect(this.ctx.destination);
+        osc.start(t); osc.stop(t + 0.06);
+    }
+
+    _track(node) {
+        this._activeNodes.push(node);
+        node.onended = () => { this._activeNodes = this._activeNodes.filter(n => n !== node); };
+    }
+
+    stopAll() {
+        for (const n of this._activeNodes) { try { n.stop(); } catch {} }
+        this._activeNodes = [];
+    }
+}
+
+// ─── StaffManager (canvas staff notation, infinite scroll, multi-track) ───
+class StaffManager {
+    static PITCHES = [
+        { name: 'A5', freq: 880.00 }, { name: 'G5', freq: 783.99 },
+        { name: 'F5', freq: 698.46 }, { name: 'E5', freq: 659.25 },
+        { name: 'D5', freq: 587.33 }, { name: 'C5', freq: 523.25 },
+        { name: 'B4', freq: 493.88 }, { name: 'A4', freq: 440.00 },
+        { name: 'G4', freq: 392.00 }, { name: 'F4', freq: 349.23 },
+        { name: 'E4', freq: 329.63 }, { name: 'D4', freq: 293.66 },
+        { name: 'C4', freq: 261.63 },
+    ];
+    static DURATIONS = { whole: 4, half: 2, quarter: 1, eighth: 0.5 };
+    static NUM_TRACKS = 4;
+
+    constructor(canvas, scrollEl, synth, opts) {
+        this.canvas = canvas;
+        this.c = canvas.getContext('2d');
+        this.scrollEl = scrollEl;
+        this.synth = synth;
+
+        // Layout
+        this.STAFF_TOP = 50;
+        this.LINE_GAP = 20;
+        this.LEFT_MARGIN = 55;
+        this.BEAT_WIDTH = 45;
+        this.NOTE_R = 7;
+        this.totalBeats = 64; // starts with 16 measures — grows automatically
+
+        // Tracks
+        this.tracks = [];
+        for (let i = 0; i < StaffManager.NUM_TRACKS; i++) {
+            this.tracks.push({
+                instrument: ['piano', 'guitar', 'violin', 'flute'][i],
+                volume: 0.8, muted: false, notes: [],
+            });
+        }
+        this.activeTrack = 0;
+        this.tempo = 120;
+        this.masterVolume = 0.8;
+        this.loop = false;
+        this.metronome = false;
+        this.currentDuration = 'quarter';
+        this.eraserMode = false;
+        this.selectedNote = null;
+        this._dragging = null;
+
+        // Playback
+        this._playing = false;
+        this._paused = false;
+        this._playStartTime = 0;
+        this._pauseOffset = 0;
+        this._animFrame = null;
+        this._playheadBeat = 0;
+
+        // Callbacks
+        this.onNoteCountChange = opts.onNoteCountChange || null;
+        this.onPlayStateChange = opts.onPlayStateChange || null;
+        this.onPositionChange = opts.onPositionChange || null;
+        this.onSeekUpdate = opts.onSeekUpdate || null;
+
+        this._bindEvents();
+        this._resize();
+        log.info('MUSIC', 'StaffManager created');
+    }
+
+    // ─── Coordinate mapping ───
+    _pitchY(i) { return this.STAFF_TOP + i * this.LINE_GAP; }
+    _yPitch(y) { return Math.max(0, Math.min(12, Math.round((y - this.STAFF_TOP) / this.LINE_GAP))); }
+    _beatX(b) { return this.LEFT_MARGIN + b * this.BEAT_WIDTH; }
+    _xBeat(x) { return Math.max(0, Math.round((x - this.LEFT_MARGIN) / this.BEAT_WIDTH * 2) / 2); }
+
+    _resize() {
+        const w = Math.max(this.scrollEl.clientWidth, this._beatX(this.totalBeats) + 40);
+        this.canvas.width = w;
+        this.canvas.height = this.scrollEl.clientHeight;
+        this.render();
+    }
+
+    _ensureWidth(beat) {
+        while (beat >= this.totalBeats - 2) this.totalBeats += 16;
+        const needed = this._beatX(this.totalBeats) + 40;
+        if (this.canvas.width < needed) {
+            this.canvas.width = needed;
+            this.render();
+        }
+    }
+
+    // ─── Rendering ───
+    render() {
+        const { c, canvas } = this;
+        const w = canvas.width, h = canvas.height;
+        c.clearRect(0, 0, w, h);
+        c.fillStyle = '#1e1e1e';
+        c.fillRect(0, 0, w, h);
+
+        // Staff lines (indices 2,4,6,8,10 = F5,D5,B4,G4,E4)
+        c.strokeStyle = '#444';
+        c.lineWidth = 1;
+        for (const idx of [2, 4, 6, 8, 10]) {
+            const y = this._pitchY(idx);
+            c.beginPath(); c.moveTo(this.LEFT_MARGIN - 5, y); c.lineTo(w, y); c.stroke();
+        }
+
+        // Pitch labels
+        c.fillStyle = '#666';
+        c.font = '10px Courier New, monospace';
+        c.textAlign = 'right';
+        for (let i = 0; i < 13; i++) {
+            const y = this._pitchY(i);
+            const name = StaffManager.PITCHES[i].name;
+            c.fillStyle = name.startsWith('C') ? '#F7DF1E' : '#666';
+            c.fillText(name, this.LEFT_MARGIN - 10, y + 4);
+        }
+        c.textAlign = 'left';
+
+        // Measure bars + beat numbers
+        c.font = '10px Tahoma, sans-serif';
+        for (let b = 0; b <= this.totalBeats; b++) {
+            const x = this._beatX(b);
+            if (x > w) break;
+            if (b % 4 === 0) {
+                c.strokeStyle = '#555';
+                c.lineWidth = b % 16 === 0 ? 2 : 1;
+                c.beginPath(); c.moveTo(x, this._pitchY(2) - 10); c.lineTo(x, this._pitchY(10) + 10); c.stroke();
+                c.fillStyle = '#F7DF1E';
+                c.fillText(String(b / 4 + 1), x + 2, this._pitchY(0) - 2);
+            } else {
+                // Subtle beat tick
+                c.strokeStyle = '#2a2a28';
+                c.lineWidth = 1;
+                c.beginPath(); c.moveTo(x, this._pitchY(2)); c.lineTo(x, this._pitchY(10)); c.stroke();
+            }
+        }
+
+        // Draw notes for active track
+        const track = this.tracks[this.activeTrack];
+        for (const note of track.notes) {
+            this._drawNote(note, note === this.selectedNote);
+        }
+
+        // Playhead
+        if (this._playing || this._paused) {
+            const px = this._beatX(this._playheadBeat);
+            c.strokeStyle = '#c97a7a';
+            c.lineWidth = 2;
+            c.beginPath(); c.moveTo(px, this._pitchY(0) - 15); c.lineTo(px, this._pitchY(12) + 15); c.stroke();
+            // Triangle head
+            c.fillStyle = '#c97a7a';
+            c.beginPath(); c.moveTo(px - 5, this._pitchY(0) - 15); c.lineTo(px + 5, this._pitchY(0) - 15); c.lineTo(px, this._pitchY(0) - 8); c.fill();
+        }
+    }
+
+    _drawNote(note, selected) {
+        const { c } = this;
+        const x = this._beatX(note.beat);
+        const y = this._pitchY(note.pitchIndex);
+        const r = this.NOTE_R;
+        const dur = note.duration;
+        const color = selected ? '#F7DF1E' : '#e0e0e0';
+
+        // Ledger lines
+        if (note.pitchIndex <= 0) { c.strokeStyle = '#555'; c.lineWidth = 1; c.beginPath(); c.moveTo(x - r - 4, this._pitchY(0)); c.lineTo(x + r + 4, this._pitchY(0)); c.stroke(); }
+        if (note.pitchIndex >= 12) { c.strokeStyle = '#555'; c.lineWidth = 1; c.beginPath(); c.moveTo(x - r - 4, this._pitchY(12)); c.lineTo(x + r + 4, this._pitchY(12)); c.stroke(); }
+
+        // Note head
+        c.beginPath();
+        c.ellipse(x, y, r, r * 0.7, -0.2, 0, Math.PI * 2);
+        if (dur === 'whole' || dur === 'half') {
+            c.strokeStyle = color; c.lineWidth = 2; c.stroke();
+            if (selected) { c.fillStyle = 'rgba(247,223,30,0.15)'; c.fill(); }
+        } else {
+            c.fillStyle = color; c.fill();
+        }
+
+        // Stem
+        if (dur !== 'whole') {
+            c.strokeStyle = color; c.lineWidth = 1.5;
+            const up = note.pitchIndex >= 6;
+            c.beginPath();
+            if (up) { c.moveTo(x + r - 1, y); c.lineTo(x + r - 1, y - 32); }
+            else { c.moveTo(x - r + 1, y); c.lineTo(x - r + 1, y + 32); }
+            c.stroke();
+
+            // Flag for eighth
+            if (dur === 'eighth') {
+                c.beginPath();
+                if (up) { c.moveTo(x + r - 1, y - 32); c.quadraticCurveTo(x + r + 10, y - 22, x + r + 3, y - 14); }
+                else { c.moveTo(x - r + 1, y + 32); c.quadraticCurveTo(x - r - 10, y + 22, x - r - 3, y + 14); }
+                c.stroke();
+            }
+        }
+    }
+
+    // ─── Interaction ───
+    _bindEvents() {
+        this.canvas.addEventListener('mousedown', (e) => this._onDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this._onMove(e));
+        this.canvas.addEventListener('mouseup', () => { this._dragging = null; });
+        this.canvas.addEventListener('mouseleave', () => { this._dragging = null; });
+        document.addEventListener('keydown', (e) => {
+            if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedNote) {
+                this._removeNote(this.selectedNote);
+            }
+        });
+    }
+
+    _pos(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+
+    _hitTest(x, y) {
+        const track = this.tracks[this.activeTrack];
+        for (const n of track.notes) {
+            const nx = this._beatX(n.beat), ny = this._pitchY(n.pitchIndex);
+            if (Math.abs(x - nx) < 12 && Math.abs(y - ny) < 10) return n;
+        }
+        return null;
+    }
+
+    _onDown(e) {
+        const p = this._pos(e);
+        const hit = this._hitTest(p.x, p.y);
+
+        if (this.eraserMode) { if (hit) this._removeNote(hit); return; }
+
+        if (hit) {
+            this.selectedNote = hit;
+            this._dragging = hit;
+            const pitch = StaffManager.PITCHES[hit.pitchIndex];
+            this.synth.playNote(pitch.freq, 0.25, this.tracks[this.activeTrack].instrument, undefined, this.tracks[this.activeTrack].volume * this.masterVolume);
+            this.render();
+            return;
+        }
+
+        if (p.x >= this.LEFT_MARGIN) {
+            const pitchIndex = this._yPitch(p.y);
+            const beat = this._xBeat(p.x);
+            this._ensureWidth(beat + 4);
+            const note = { pitchIndex, duration: this.currentDuration, beat };
+            this.tracks[this.activeTrack].notes.push(note);
+            this.selectedNote = note;
+            const pitch = StaffManager.PITCHES[pitchIndex];
+            this.synth.playNote(pitch.freq, 0.25, this.tracks[this.activeTrack].instrument, undefined, this.tracks[this.activeTrack].volume * this.masterVolume);
+            this.render();
+            this._notifyNoteCount();
+        }
+    }
+
+    _onMove(e) {
+        if (!this._dragging) return;
+        const p = this._pos(e);
+        this._dragging.pitchIndex = this._yPitch(p.y);
+        this._dragging.beat = this._xBeat(p.x);
+        this._ensureWidth(this._dragging.beat + 4);
+        this.render();
+    }
+
+    _removeNote(note) {
+        const track = this.tracks[this.activeTrack];
+        const idx = track.notes.indexOf(note);
+        if (idx !== -1) { track.notes.splice(idx, 1); if (this.selectedNote === note) this.selectedNote = null; this.render(); this._notifyNoteCount(); }
+    }
+
+    switchTrack(i) { this.activeTrack = i; this.selectedNote = null; this.render(); }
+
+    clear() {
+        this.tracks[this.activeTrack].notes = [];
+        this.selectedNote = null;
+        this.render();
+        this._notifyNoteCount();
+    }
+
+    // ─── Playback ───
+    play() {
+        if (this._playing && !this._paused) return;
+        this.synth._ensureCtx();
+        const ctx = this.synth.ctx;
+
+        this._playing = true;
+        this._paused = false;
+
+        // Find the last beat across all tracks
+        let lastBeat = 0;
+        for (const t of this.tracks) for (const n of t.notes) {
+            const end = n.beat + StaffManager.DURATIONS[n.duration];
+            if (end > lastBeat) lastBeat = end;
+        }
+        if (lastBeat === 0) lastBeat = this.totalBeats;
+        this._lastBeat = lastBeat;
+
+        // Schedule all notes across all tracks
+        const beatDur = 60 / this.tempo;
+        const startTime = ctx.currentTime - this._pauseOffset;
+        this._playStartTime = startTime;
+
+        for (const track of this.tracks) {
+            if (track.muted) continue;
+            for (const note of track.notes) {
+                const t = startTime + note.beat * beatDur;
+                const dur = StaffManager.DURATIONS[note.duration] * beatDur;
+                if (t >= ctx.currentTime - 0.01) {
+                    const p = StaffManager.PITCHES[note.pitchIndex];
+                    this.synth.playNote(p.freq, dur, track.instrument, t, track.volume * this.masterVolume);
+                }
+            }
+        }
+
+        // Animate
+        const animate = () => {
+            if (!this._playing || this._paused) return;
+            const elapsed = ctx.currentTime - this._playStartTime;
+            this._playheadBeat = elapsed / beatDur;
+            if (this.onSeekUpdate) this.onSeekUpdate(this._playheadBeat, this._lastBeat);
+
+            // Metronome
+            if (this.metronome) {
+                const currentBeat = Math.floor(this._playheadBeat);
+                if (this._lastMetroBeat !== currentBeat && currentBeat < this._lastBeat) {
+                    this._lastMetroBeat = currentBeat;
+                    this.synth.playClick(currentBeat % 4 === 0);
+                }
+            }
+
+            // Auto-scroll
+            const headPx = this._beatX(this._playheadBeat);
+            const scrollW = this.scrollEl.clientWidth;
+            if (headPx > this.scrollEl.scrollLeft + scrollW - 80) {
+                this.scrollEl.scrollLeft = headPx - 80;
+            }
+
+            if (this._playheadBeat >= this._lastBeat) {
+                if (this.loop) {
+                    this._pauseOffset = 0;
+                    this._playStartTime = ctx.currentTime;
+                    this._lastMetroBeat = -1;
+                    // Reschedule
+                    for (const track of this.tracks) {
+                        if (track.muted) continue;
+                        for (const note of track.notes) {
+                            const t2 = ctx.currentTime + note.beat * beatDur;
+                            const dur2 = StaffManager.DURATIONS[note.duration] * beatDur;
+                            const p = StaffManager.PITCHES[note.pitchIndex];
+                            this.synth.playNote(p.freq, dur2, track.instrument, t2, track.volume * this.masterVolume);
+                        }
+                    }
+                } else { this.stop(); return; }
+            }
+
+            this.render();
+            this._animFrame = requestAnimationFrame(animate);
+        };
+
+        this._lastMetroBeat = -1;
+        if (this.onPlayStateChange) this.onPlayStateChange('playing');
+        this._animFrame = requestAnimationFrame(animate);
+    }
+
+    pause() {
+        if (!this._playing || this._paused) return;
+        this._paused = true;
+        this._pauseOffset = this.synth.ctx.currentTime - this._playStartTime;
+        this.synth.stopAll();
+        if (this._animFrame) cancelAnimationFrame(this._animFrame);
+        if (this.onPlayStateChange) this.onPlayStateChange('paused');
+    }
+
+    stop() {
+        this._playing = false; this._paused = false;
+        this._playheadBeat = 0; this._pauseOffset = 0;
+        this.synth.stopAll();
+        if (this._animFrame) cancelAnimationFrame(this._animFrame);
+        if (this.onPlayStateChange) this.onPlayStateChange('stopped');
+        if (this.onPositionChange) this.onPositionChange('Ready');
+        this.render();
+    }
+
+    rewind() {
+        this.stop();
+        this.scrollEl.scrollLeft = 0;
+        if (this.onSeekUpdate) this.onSeekUpdate(0, this.totalBeats);
+    }
+
+    skipForward() {
+        const beatDur = 60 / this.tempo;
+        const current = this._paused ? this._pauseOffset / beatDur : 0;
+        const nextMeasure = (Math.floor(current / 4) + 1) * 4;
+        this.scrollEl.scrollLeft = this._beatX(nextMeasure) - 40;
+    }
+
+    skipBack() {
+        const beatDur = 60 / this.tempo;
+        const current = this._paused ? this._pauseOffset / beatDur : 0;
+        const prevMeasure = Math.max(0, (Math.floor(current / 4) - 1) * 4);
+        this.scrollEl.scrollLeft = this._beatX(prevMeasure) - 40;
+    }
+
+    addTrack() {
+        const idx = this.tracks.length;
+        const instruments = ['piano', 'guitar', 'violin', 'flute', 'trumpet', 'musicbox'];
+        this.tracks.push({
+            instrument: instruments[idx % instruments.length],
+            volume: 0.8, muted: false, notes: [],
+        });
+        return idx;
+    }
+
+    removeTrack(idx) {
+        if (this.tracks.length <= 1) return false;
+        this.tracks.splice(idx, 1);
+        if (this.activeTrack >= this.tracks.length) this.activeTrack = this.tracks.length - 1;
+        this.render();
+        this._notifyNoteCount();
+        return true;
+    }
+
+    seek(beat) {
+        const beatDur = 60 / this.tempo;
+        this._pauseOffset = beat * beatDur;
+        this._playheadBeat = beat;
+        this.scrollEl.scrollLeft = Math.max(0, this._beatX(beat) - 100);
+        if (this._playing && !this._paused) {
+            this.synth.stopAll();
+            if (this._animFrame) cancelAnimationFrame(this._animFrame);
+            this._playing = false;
+            this._paused = false;
+            this.play();
+        } else {
+            this.render();
+        }
+        const measure = Math.floor(beat / 4) + 1;
+        const beatInMeasure = (Math.floor(beat) % 4) + 1;
+        if (this.onPositionChange) this.onPositionChange('Measure ' + measure + ', Beat ' + beatInMeasure);
+    }
+
+    setInstrument(name) { this.tracks[this.activeTrack].instrument = name; }
+    setTrackVolume(val) { this.tracks[this.activeTrack].volume = val; }
+    toggleMute() { const t = this.tracks[this.activeTrack]; t.muted = !t.muted; return t.muted; }
+    setTempo(bpm) { this.tempo = bpm; }
+    setMasterVolume(val) { this.masterVolume = val; }
+    setLoop(on) { this.loop = on; }
+    setMetronome(on) { this.metronome = on; }
+
+    // ─── Export to WAV ───
+    async exportWav(filename) {
+        let lastBeat = 0;
+        for (const t of this.tracks) for (const n of t.notes) {
+            const end = n.beat + StaffManager.DURATIONS[n.duration];
+            if (end > lastBeat) lastBeat = end;
+        }
+        if (lastBeat === 0) return;
+
+        const beatDur = 60 / this.tempo;
+        const totalSec = lastBeat * beatDur + 0.5;
+        const sampleRate = 44100;
+        const offCtx = new OfflineAudioContext(1, Math.ceil(sampleRate * totalSec), sampleRate);
+
+        // Schedule all notes into offline context
+        const origCtx = this.synth.ctx;
+        this.synth.ctx = offCtx;
+        for (const track of this.tracks) {
+            if (track.muted) continue;
+            for (const note of track.notes) {
+                const t = note.beat * beatDur;
+                const dur = StaffManager.DURATIONS[note.duration] * beatDur;
+                const p = StaffManager.PITCHES[note.pitchIndex];
+                this.synth.playNote(p.freq, dur, track.instrument, t, track.volume * this.masterVolume);
+            }
+        }
+        this.synth.ctx = origCtx;
+
+        const buffer = await offCtx.startRendering();
+
+        // Encode WAV
+        const data = buffer.getChannelData(0);
+        const wavLen = 44 + data.length * 2;
+        const wav = new ArrayBuffer(wavLen);
+        const v = new DataView(wav);
+        const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        writeStr(0, 'RIFF'); v.setUint32(4, wavLen - 8, true); writeStr(8, 'WAVE');
+        writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
+        v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        writeStr(36, 'data'); v.setUint32(40, data.length * 2, true);
+        for (let i = 0; i < data.length; i++) {
+            const s = Math.max(-1, Math.min(1, data[i]));
+            v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        }
+
+        const blob = new Blob([wav], { type: 'audio/wav' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (filename || 'composition') + '.wav';
+        a.click();
+        URL.revokeObjectURL(a.href);
+        log.info('MUSIC', 'Exported:', a.download);
+    }
+
+    _notifyNoteCount() {
+        let total = 0;
+        for (const t of this.tracks) total += t.notes.length;
+        if (this.onNoteCountChange) this.onNoteCountChange(total);
+        this._autoSave();
+    }
+
+    // ─── LocalStorage auto-save ───
+    _autoSave() {
+        if (!this._saveName) return;
+        try {
+            const data = {
+                name: this._saveName,
+                tempo: this.tempo,
+                masterVolume: this.masterVolume,
+                totalBeats: this.totalBeats,
+                tracks: this.tracks.map(t => ({
+                    instrument: t.instrument,
+                    volume: t.volume,
+                    muted: t.muted,
+                    notes: t.notes,
+                })),
+            };
+            localStorage.setItem('jsos:note:' + this._saveName, JSON.stringify(data));
+        } catch {}
+    }
+
+    static loadSaved(name) {
+        try {
+            const raw = localStorage.getItem('jsos:note:' + name);
+            return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+    }
+
+    static listSaved() {
+        const list = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key.startsWith('jsos:note:')) list.push(key.slice('jsos:note:'.length));
+        }
+        return list;
+    }
+
+    static deleteSaved(name) {
+        try { localStorage.removeItem('jsos:note:' + name); } catch {}
+    }
+
+    loadFromData(data) {
+        this.tempo = data.tempo || 120;
+        this.masterVolume = data.masterVolume || 0.8;
+        if (data.totalBeats > this.totalBeats) this.totalBeats = data.totalBeats;
+        this.tracks = data.tracks.map(t => ({
+            instrument: t.instrument || 'piano',
+            volume: t.volume ?? 0.8,
+            muted: t.muted || false,
+            notes: t.notes || [],
+        }));
+        this.activeTrack = 0;
+        this._resize();
+        this._notifyNoteCount();
+    }
+
+    setSaveName(name) { this._saveName = name; }
+
+    destroy() { this.stop(); }
 }
 
 // ─── JSTubeManager (YouTube search + embedded player) ───
@@ -427,7 +1126,7 @@ class JSChatApp extends BaseApp {
         this.els.messages.innerHTML = '';
         this.els.error.textContent = '';
         this.els.roomCodeDisplay.textContent = '';
-        this.els.windowTitle.textContent = '{ } JS Chat';
+        this.els.windowTitle.textContent = '{ } ' + (window.JSOS_CONFIG?.chat || 'JS Chat');
         this.els.chatStatusbar.style.display = 'none';
         this.els.statusUsername.textContent = '';
         this.els.userList.innerHTML = '';
@@ -444,7 +1143,7 @@ class JSChatApp extends BaseApp {
             this.els.chatStatusbar.style.display = '';
             this.els.statusUsername.textContent = this.client.username;
             this.els.roomCodeDisplay.textContent = code;
-            this.els.windowTitle.textContent = '{ } JS Chat';
+            this.els.windowTitle.textContent = '{ } ' + (window.JSOS_CONFIG?.chat || 'JS Chat');
             document.getElementById('message').focus();
             history.forEach(m => {
                 if (m.type === 'message') this._addMessage(m.username, m.message, m.image);
@@ -562,18 +1261,254 @@ class JSChatApp extends BaseApp {
     }
 }
 
-// ─── Terminal App ───
-class TerminalApp extends BaseApp {
+// ─── JS Note App (Staff Notation) ───
+class MusicMakerApp extends BaseApp {
     constructor(desktop) {
-        super(desktop, 'terminal-window', 'terminal-icon');
-        this.manager = new TerminalSessionManager(
-            document.getElementById('terminal-panes'),
-            document.getElementById('terminal-tabs'),
-            document.getElementById('terminal-new-tab')
-        );
+        super(desktop, 'music-window', 'music-icon');
+        this.synth = new MusicSynthesizer();
+        this.compositionName = '';
+        this.manager = null;
+
+        // Lobby: name composition
+        document.getElementById('music-start-btn').addEventListener('click', () => this._startEditor());
+        document.getElementById('music-name-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this._startEditor();
+        });
+
+        // Per-track controls (bound once, manager swapped per session)
+        document.getElementById('music-instrument').addEventListener('change', (e) => {
+            if (this.manager) { this.manager.setInstrument(e.target.value); this._updateStatusBar(); }
+        });
+        document.getElementById('music-track-vol').addEventListener('input', (e) => {
+            if (this.manager) this.manager.setTrackVolume(parseInt(e.target.value) / 100);
+        });
+        document.getElementById('music-mute-btn').addEventListener('click', () => {
+            if (!this.manager) return;
+            const muted = this.manager.toggleMute();
+            const btn = document.getElementById('music-mute-btn');
+            btn.classList.toggle('active', muted); btn.textContent = muted ? 'Unmute' : 'Mute';
+        });
+        document.getElementById('music-note-type').addEventListener('change', (e) => {
+            if (this.manager) { this.manager.currentDuration = e.target.value; this.manager.eraserMode = false; }
+            document.getElementById('music-eraser-btn').classList.remove('active');
+        });
+        document.getElementById('music-eraser-btn').addEventListener('click', () => {
+            if (this.manager) this.manager.eraserMode = !this.manager.eraserMode;
+            document.getElementById('music-eraser-btn').classList.toggle('active', this.manager?.eraserMode);
+        });
+
+        // Tempo
+        const tempoSlider = document.getElementById('music-tempo');
+        const tempoLabel = document.getElementById('music-tempo-label');
+        tempoSlider.addEventListener('input', () => {
+            tempoLabel.textContent = tempoSlider.value;
+            if (this.manager) this.manager.setTempo(parseInt(tempoSlider.value));
+        });
+
+        // Master volume + Loop + Metronome + Export
+        document.getElementById('music-master-vol').addEventListener('input', (e) => {
+            if (this.manager) this.manager.setMasterVolume(parseInt(e.target.value) / 100);
+        });
+        document.getElementById('music-loop-btn').addEventListener('click', () => {
+            if (this.manager) { this.manager.setLoop(!this.manager.loop); document.getElementById('music-loop-btn').classList.toggle('active', this.manager.loop); }
+        });
+        document.getElementById('music-metro-btn').addEventListener('click', () => {
+            if (this.manager) { this.manager.setMetronome(!this.manager.metronome); document.getElementById('music-metro-btn').classList.toggle('active', this.manager.metronome); }
+        });
+        document.getElementById('music-export-btn').addEventListener('click', () => {
+            if (this.manager) this.manager.exportWav(this.compositionName);
+        });
+
+        // Playback
+        document.getElementById('music-clear-btn').addEventListener('click', () => { if (this.manager) this.manager.clear(); });
+        document.getElementById('music-rewind').addEventListener('click', () => { if (this.manager) this.manager.rewind(); });
+        document.getElementById('music-skip-back').addEventListener('click', () => { if (this.manager) this.manager.skipBack(); });
+        document.getElementById('music-play').addEventListener('click', () => { if (this.manager) this.manager.play(); });
+        document.getElementById('music-pause').addEventListener('click', () => { if (this.manager) this.manager.pause(); });
+        document.getElementById('music-stop').addEventListener('click', () => { if (this.manager) this.manager.stop(); });
+        document.getElementById('music-skip-fwd').addEventListener('click', () => { if (this.manager) this.manager.skipForward(); });
+
+        // Seek bar
+        document.getElementById('music-seek').addEventListener('input', (e) => {
+            if (this.manager) this.manager.seek(parseFloat(e.target.value));
+        });
+
+        // Add track
+        document.getElementById('music-add-track').addEventListener('click', () => this._addTrack());
     }
-    onLaunch() { this.manager.open(); setTimeout(() => this.manager.focus(), 100); }
-    onClose() { this.manager.closeAll(); }
+
+    _startEditor() {
+        this.compositionName = document.getElementById('music-name-input').value.trim() || 'Untitled';
+        document.getElementById('music-lobby').style.display = 'none';
+        document.getElementById('music-editor').style.display = '';
+        document.getElementById('music-title').textContent = '\u266A ' + this.compositionName;
+
+        this.manager = new StaffManager(
+            document.getElementById('music-canvas'),
+            document.getElementById('music-canvas-scroll'),
+            this.synth,
+            {
+                onNoteCountChange: (count) => {
+                    document.getElementById('music-note-count').textContent = count + ' note' + (count !== 1 ? 's' : '');
+                },
+                onPlayStateChange: (state) => {
+                    document.getElementById('music-play').disabled = (state === 'playing');
+                    document.getElementById('music-pause').disabled = (state !== 'playing');
+                    document.getElementById('music-stop').disabled = (state === 'stopped');
+                },
+                onPositionChange: (text) => {
+                    document.getElementById('music-position').textContent = text;
+                },
+                onSeekUpdate: (beat, total) => {
+                    const seek = document.getElementById('music-seek');
+                    seek.max = total;
+                    seek.value = beat;
+                },
+            }
+        );
+        this.manager.setSaveName(this.compositionName);
+        this._rebuildTabs();
+        this._updateTrackControls();
+        setTimeout(() => this.manager._resize(), 50);
+    }
+
+    _rebuildTabs() {
+        const tabsEl = document.getElementById('music-track-tabs');
+        const addBtn = document.getElementById('music-add-track');
+        // Remove old tabs (keep add button)
+        tabsEl.querySelectorAll('.music-track-tab').forEach(t => t.remove());
+        this.manager.tracks.forEach((track, i) => {
+            const tab = document.createElement('button');
+            tab.className = 'music-track-tab' + (i === this.manager.activeTrack ? ' active' : '');
+            tab.dataset.track = i;
+            const label = 'Track ' + (i + 1);
+            tab.innerHTML = label + ' <span class="music-track-x" data-track="' + i + '">&times;</span>';
+            tab.addEventListener('click', (e) => {
+                if (e.target.classList.contains('music-track-x')) {
+                    this._removeTrack(parseInt(e.target.dataset.track));
+                    return;
+                }
+                this.manager.switchTrack(i);
+                tabsEl.querySelectorAll('.music-track-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                this._updateTrackControls();
+            });
+            tabsEl.insertBefore(tab, addBtn);
+        });
+    }
+
+    _addTrack() {
+        if (!this.manager) return;
+        this.manager.addTrack();
+        this.manager.switchTrack(this.manager.tracks.length - 1);
+        this._rebuildTabs();
+        this._updateTrackControls();
+    }
+
+    _removeTrack(idx) {
+        if (!this.manager || this.manager.tracks.length <= 1) return;
+        this.manager.removeTrack(idx);
+        this._rebuildTabs();
+        this._updateTrackControls();
+    }
+
+    _updateTrackControls() {
+        if (!this.manager) return;
+        const track = this.manager.tracks[this.manager.activeTrack];
+        document.getElementById('music-instrument').value = track.instrument;
+        document.getElementById('music-track-vol').value = Math.round(track.volume * 100);
+        const muteBtn = document.getElementById('music-mute-btn');
+        muteBtn.classList.toggle('active', track.muted);
+        muteBtn.textContent = track.muted ? 'Unmute' : 'Mute';
+        this._updateStatusBar();
+    }
+
+    _updateStatusBar() {
+        if (!this.manager) return;
+        const sel = document.getElementById('music-instrument');
+        const instName = sel.options[sel.selectedIndex].text;
+        document.getElementById('music-status-instrument').textContent =
+            'Track ' + (this.manager.activeTrack + 1) + ': ' + instName;
+    }
+
+    onLaunch() {
+        document.getElementById('music-name-input').focus();
+        this._showSavedList();
+    }
+
+    _showSavedList() {
+        const el = document.getElementById('music-saved-list');
+        const saved = StaffManager.listSaved();
+        if (!saved.length) { el.innerHTML = ''; return; }
+        el.innerHTML = '<div class="lobby-divider">&mdash; or resume a saved composition &mdash;</div>';
+        saved.forEach(name => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:8px; margin:6px 0;';
+            const btn = document.createElement('button');
+            btn.className = 'lobby-btn';
+            btn.style.cssText = 'padding:6px 20px; font-size:12px; margin:0;';
+            btn.textContent = name;
+            btn.addEventListener('click', () => this._loadComposition(name));
+            const del = document.createElement('button');
+            del.className = 'music-toolbar-btn';
+            del.style.cssText = 'padding:4px 8px; font-size:10px; margin:0;';
+            del.textContent = '\u00D7';
+            del.title = 'Delete';
+            del.addEventListener('click', () => { StaffManager.deleteSaved(name); this._showSavedList(); });
+            row.appendChild(btn);
+            row.appendChild(del);
+            el.appendChild(row);
+        });
+    }
+
+    _loadComposition(name) {
+        const data = StaffManager.loadSaved(name);
+        if (!data) return;
+        this.compositionName = name;
+        document.getElementById('music-lobby').style.display = 'none';
+        document.getElementById('music-editor').style.display = '';
+        document.getElementById('music-title').textContent = '\u266A ' + name;
+
+        this.manager = new StaffManager(
+            document.getElementById('music-canvas'),
+            document.getElementById('music-canvas-scroll'),
+            this.synth,
+            {
+                onNoteCountChange: (count) => {
+                    document.getElementById('music-note-count').textContent = count + ' note' + (count !== 1 ? 's' : '');
+                },
+                onPlayStateChange: (state) => {
+                    document.getElementById('music-play').disabled = (state === 'playing');
+                    document.getElementById('music-pause').disabled = (state !== 'playing');
+                    document.getElementById('music-stop').disabled = (state === 'stopped');
+                },
+                onPositionChange: (text) => {
+                    document.getElementById('music-position').textContent = text;
+                },
+                onSeekUpdate: (beat, total) => {
+                    const seek = document.getElementById('music-seek');
+                    seek.max = total;
+                    seek.value = beat;
+                },
+            }
+        );
+        this.manager.setSaveName(name);
+        this.manager.loadFromData(data);
+        document.getElementById('music-tempo').value = this.manager.tempo;
+        document.getElementById('music-tempo-label').textContent = this.manager.tempo;
+        document.getElementById('music-master-vol').value = Math.round(this.manager.masterVolume * 100);
+        this._rebuildTabs();
+        this._updateTrackControls();
+        setTimeout(() => this.manager._resize(), 50);
+    }
+
+    onClose() {
+        if (this.manager) { this.manager.destroy(); this.manager = null; }
+        document.getElementById('music-lobby').style.display = '';
+        document.getElementById('music-editor').style.display = 'none';
+        document.getElementById('music-name-input').value = '';
+        document.getElementById('music-title').textContent = '\u266A ' + (window.JSOS_CONFIG?.note || 'JS Note');
+    }
 }
 
 // ─── JSTube App ───
@@ -714,12 +1649,28 @@ class Desktop {
 
         // Register all apps — to add a new app, just add one line here
         this.registerApp(new JSChatApp(this));
-        this.registerApp(new TerminalApp(this));
+        this.registerApp(new MusicMakerApp(this));
         this.registerApp(new JSTubeApp(this));
         this.registerApp(new JSCallApp(this));
 
+        // Apply config names
+        this._applyConfig();
+
         // Splash screen
         this._bindSplash();
+    }
+
+    _applyConfig() {
+        const cfg = window.JSOS_CONFIG;
+        if (!cfg) return;
+        if (cfg.os) document.title = cfg.os;
+        document.querySelectorAll('[data-name]').forEach(el => {
+            const key = el.dataset.name;
+            if (!cfg[key]) return;
+            const prefix = el.dataset.namePrefix || '';
+            el.textContent = prefix + cfg[key];
+        });
+        log.info('DESKTOP', 'Config applied');
     }
 
     /** Register an app with the desktop */
@@ -770,7 +1721,7 @@ class Desktop {
         overlay.className = 'error-overlay';
         overlay.innerHTML =
             '<div class="error-dialog">' +
-                '<div class="error-dialog-titlebar"><span>JS OS - Error</span></div>' +
+                '<div class="error-dialog-titlebar"><span>' + (window.JSOS_CONFIG?.os || 'JS OS') + ' - Error</span></div>' +
                 '<div class="error-dialog-body">' +
                     '<div class="error-dialog-icon">&#9888;</div>' +
                     '<div class="error-dialog-text">' + message + '</div>' +
