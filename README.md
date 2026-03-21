@@ -7,7 +7,7 @@ A retro Windows 2000-style web operating system built with vanilla JavaScript, N
 | App | Description |
 |-----|-------------|
 | **JS Chat** | Room-based chat with image sharing, user panel, and invite codes |
-| **Gemma AI** | AI chat powered by Google Gemini with streaming responses, code blocks, conversation history, and message editing |
+| **JS AI AI** | AI chat powered by Google Gemini with streaming responses, code blocks, conversation history, and message editing |
 | **JSTube** | YouTube search and embedded video player |
 | **JS Call** | WebRTC voice calls with mute/unmute and room codes |
 
@@ -71,7 +71,7 @@ Set these in your `.env` file.
 ## Version History
 
 ### v3.0 — Gemini AI (2026-03-21)
-- Replaced JS Note music app with Gemma AI chat
+- Replaced JS Note music app with JS AI AI chat
 - Google Gemini API with streaming responses
 - Conversation history (localStorage), message editing, code blocks
 - Gemini API key required to start

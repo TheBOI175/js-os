@@ -250,8 +250,8 @@ class CallClient {
     }
 }
 
-// ─── GemmaClient (streams AI responses via SSE) ───
-class GemmaClient {
+// ─── JSAIClient (streams AI responses via SSE) ───
+class JSAIClient {
     constructor() {
         this._controller = null;
         this.streaming = false;
@@ -608,11 +608,11 @@ class JSChatApp extends BaseApp {
     }
 }
 
-// ─── Gemma AI App ───
-class GemmaApp extends BaseApp {
+// ─── JS AI App ───
+class JSAIApp extends BaseApp {
     constructor(desktop) {
         super(desktop, 'ai-window', 'ai-icon');
-        this.client = new GemmaClient();
+        this.client = new JSAIClient();
         this.conversation = null;
         this._selectedConvId = null;
         this._streamingEl = null;
@@ -846,6 +846,7 @@ class GemmaApp extends BaseApp {
     onLaunch() { this._showLobby(); }
 
     onClose() {
+        this._savePartial();
         this.client.abort();
         this._streamingEl = null;
         this._fullText = '';
@@ -903,7 +904,15 @@ class GemmaApp extends BaseApp {
         this.els.input.focus();
     }
 
+    _savePartial() {
+        if (this._fullText && this.conversation) {
+            this.conversation.messages.push({ role: 'assistant', content: this._fullText, timestamp: Date.now() });
+            ConversationStore.save(this.conversation);
+        }
+    }
+
     _backToLobby() {
+        this._savePartial();
         this.client.abort();
         this._streamingEl = null;
         this._fullText = '';
@@ -1055,7 +1064,7 @@ class Desktop {
 
         // Register all apps — to add a new app, just add one line here
         this.registerApp(new JSChatApp(this));
-        this.registerApp(new GemmaApp(this));
+        this.registerApp(new JSAIApp(this));
         this.registerApp(new JSTubeApp(this));
         this.registerApp(new JSCallApp(this));
 
