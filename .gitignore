@@ -4,3 +4,4 @@ package-lock.json
 .claude/
 .DS_Store
 *.log
+CLAUDE.md
