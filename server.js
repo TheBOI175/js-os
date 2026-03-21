@@ -5,6 +5,9 @@ const { WebSocketServer } = require('ws');
 const os = require('os');
 const crypto = require('crypto');
 
+// ─── Load .env file ───
+require('dotenv').config();
+
 // ─── Configuration ───
 const PORT = parseInt(process.env.PORT) || 8080;
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
