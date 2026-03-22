@@ -821,45 +821,94 @@ class JSAIApp extends BaseApp {
 
     _formatMarkdown(text) {
         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        let result = '', i = 0;
-        while (i < text.length) {
-            if (text.slice(i, i + 3) === '```') {
-                const nlIdx = text.indexOf('\n', i + 3);
-                const lang = nlIdx > -1 ? text.slice(i + 3, nlIdx).trim() : '';
-                const codeStart = nlIdx > -1 ? nlIdx + 1 : i + 3;
-                const codeEnd = text.indexOf('```', codeStart);
-                if (codeEnd > -1) {
-                    result += '<div class="ai-code-block">';
-                    if (lang) result += '<div class="ai-code-lang">' + esc(lang) + '</div>';
-                    result += '<pre><code>' + esc(text.slice(codeStart, codeEnd)) + '</code></pre></div>';
-                    i = codeEnd + 3;
-                    continue;
-                }
+
+        // First pass: extract code blocks so they don't get processed
+        const codeBlocks = [];
+        text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+            const idx = codeBlocks.length;
+            codeBlocks.push('<div class="ai-code-block">' +
+                (lang ? '<div class="ai-code-lang">' + esc(lang) + '</div>' : '') +
+                '<pre><code>' + esc(code) + '</code></pre></div>');
+            return '\x00CODEBLOCK' + idx + '\x00';
+        });
+
+        // Process line by line
+        const lines = text.split('\n');
+        const result = [];
+        let inList = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i];
+
+            // Code block placeholder
+            const cbMatch = line.match(/^\x00CODEBLOCK(\d+)\x00$/);
+            if (cbMatch) {
+                if (inList) { result.push('</ul>'); inList = false; }
+                result.push(codeBlocks[parseInt(cbMatch[1])]);
+                continue;
             }
-            if (text[i] === '`') {
-                const end = text.indexOf('`', i + 1);
-                if (end > i + 1) {
-                    result += '<code class="ai-inline-code">' + esc(text.slice(i + 1, end)) + '</code>';
-                    i = end + 1;
-                    continue;
-                }
+
+            // Horizontal rule
+            if (/^-{3,}$/.test(line.trim()) || /^\*{3,}$/.test(line.trim())) {
+                if (inList) { result.push('</ul>'); inList = false; }
+                result.push('<hr style="border: none; border-top: 1px solid #555; margin: 8px 0;">');
+                continue;
             }
-            if (text.slice(i, i + 2) === '**') {
-                const end = text.indexOf('**', i + 2);
-                if (end > -1) {
-                    result += '<strong>' + esc(text.slice(i + 2, end)) + '</strong>';
-                    i = end + 2;
-                    continue;
-                }
+
+            // Headers
+            const headerMatch = line.match(/^(#{1,3})\s+(.+)$/);
+            if (headerMatch) {
+                if (inList) { result.push('</ul>'); inList = false; }
+                const level = headerMatch[1].length;
+                const sizes = { 1: '18px', 2: '15px', 3: '13px' };
+                result.push('<div style="font-size:' + sizes[level] + '; font-weight:bold; color:#F7DF1E; margin:8px 0 4px;">' + this._inlineMarkdown(esc(headerMatch[2])) + '</div>');
+                continue;
             }
-            if (text[i] === '\n') { result += '<br>'; i++; continue; }
-            result += esc(text[i]);
-            i++;
+
+            // Bullet lists (- or *)
+            const bulletMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
+            if (bulletMatch) {
+                if (!inList) { result.push('<ul style="margin:4px 0; padding-left:20px; color:#e0e0e0;">'); inList = true; }
+                result.push('<li>' + this._inlineMarkdown(esc(bulletMatch[1])) + '</li>');
+                continue;
+            }
+
+            // Numbered lists
+            const numMatch = line.match(/^[\s]*\d+\.\s+(.+)$/);
+            if (numMatch) {
+                if (!inList) { result.push('<ul style="margin:4px 0; padding-left:20px; color:#e0e0e0; list-style-type:decimal;">'); inList = true; }
+                result.push('<li>' + this._inlineMarkdown(esc(numMatch[1])) + '</li>');
+                continue;
+            }
+
+            // Close list if we hit a non-list line
+            if (inList) { result.push('</ul>'); inList = false; }
+
+            // Empty line
+            if (!line.trim()) { result.push('<br>'); continue; }
+
+            // Regular line with inline formatting
+            result.push(this._inlineMarkdown(esc(line)));
+            if (i < lines.length - 1) result.push('<br>');
         }
-        return result;
+        if (inList) result.push('</ul>');
+        return result.join('');
     }
 
-    onLaunch() { this._showLobby(); }
+    _inlineMarkdown(line) {
+        // Inline code
+        line = line.replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>');
+        // Bold
+        line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Italic
+        line = line.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        return line;
+    }
+
+    onLaunch() {
+        this._bindClient();
+        this._showLobby();
+    }
 
     onClose() {
         this._savePartial();
