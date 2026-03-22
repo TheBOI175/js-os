@@ -1,0 +1,21 @@
+{
+    "name": "JS OS",
+    "short_name": "JS OS",
+    "description": "Retro Windows 2000-style web OS with chat, AI, video, and voice calls",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#1e1e1e",
+    "theme_color": "#F7DF1E",
+    "icons": [
+        {
+            "src": "images/logo.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "images/logo.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}

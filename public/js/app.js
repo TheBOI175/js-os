@@ -1155,6 +1155,9 @@ class Desktop {
 
         // Splash screen
         this._bindSplash();
+
+        // PWA install prompt
+        this._setupPWA();
     }
 
     _applyConfig() {
@@ -1267,6 +1270,98 @@ class Desktop {
                 }, { once: true });
             }, 1200);
         }, { once: true });
+    }
+
+    _setupPWA() {
+        // Capture Chrome/Android install prompt
+        this._deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            this._deferredInstallPrompt = e;
+            log.info('DESKTOP', 'PWA install prompt captured');
+        });
+
+        // Show iOS Safari "Add to Home Screen" hint after splash
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+        if (isIOS && !isStandalone && !localStorage.getItem('jsos_pwa_dismissed')) {
+            setTimeout(() => this._showInstallHint(), 3000);
+        }
+    }
+
+    _showInstallHint() {
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+        // If Chrome/Android has a deferred prompt, use that
+        if (this._deferredInstallPrompt) {
+            this._deferredInstallPrompt.prompt();
+            this._deferredInstallPrompt.userChoice.then((result) => {
+                log.info('DESKTOP', 'PWA install:', result.outcome);
+                this._deferredInstallPrompt = null;
+            });
+            return;
+        }
+
+        // iOS Safari: show manual instructions
+        if (!isIOS) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'error-overlay';
+        const dialog = document.createElement('div');
+        dialog.className = 'error-dialog';
+        dialog.style.width = '340px';
+
+        const titlebar = document.createElement('div');
+        titlebar.className = 'error-dialog-titlebar';
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = 'Install JS OS';
+        titlebar.appendChild(titleSpan);
+
+        const body = document.createElement('div');
+        body.className = 'error-dialog-body';
+        body.style.flexDirection = 'column';
+        body.style.gap = '10px';
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size: 40px; text-align: center;';
+        icon.textContent = '{ }';
+        const textDiv = document.createElement('div');
+        textDiv.className = 'error-dialog-text';
+        textDiv.style.textAlign = 'center';
+        textDiv.innerHTML = 'Install JS OS as an app for<br>notifications and full-screen!<br><br>' +
+            '<span style="font-size:20px;">&#9757;</span> Tap the <strong>Share</strong> button<br>' +
+            'then <strong>"Add to Home Screen"</strong>';
+        body.appendChild(icon);
+        body.appendChild(textDiv);
+
+        const buttons = document.createElement('div');
+        buttons.className = 'error-dialog-buttons';
+        buttons.style.display = 'flex';
+        buttons.style.gap = '8px';
+        buttons.style.justifyContent = 'center';
+
+        const okBtn = document.createElement('button');
+        okBtn.className = 'error-dialog-btn';
+        okBtn.textContent = 'OK';
+        const neverBtn = document.createElement('button');
+        neverBtn.className = 'error-dialog-btn';
+        neverBtn.style.background = 'linear-gradient(180deg, #555, #3a3a3a)';
+        neverBtn.style.color = '#ccc';
+        neverBtn.style.borderColor = '#555';
+        neverBtn.textContent = "Don't show again";
+
+        buttons.appendChild(okBtn);
+        buttons.appendChild(neverBtn);
+
+        dialog.appendChild(titlebar);
+        dialog.appendChild(body);
+        dialog.appendChild(buttons);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        const dismiss = () => { overlay.classList.add('closing'); setTimeout(() => overlay.remove(), 150); };
+        okBtn.addEventListener('click', dismiss);
+        neverBtn.addEventListener('click', () => { localStorage.setItem('jsos_pwa_dismissed', '1'); dismiss(); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
     }
 }
 
