@@ -56,7 +56,7 @@ class NotificationManager {
         this.swReg = null;
         this.enabled = true;
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js').then(reg => this.swReg = reg);
+            navigator.serviceWorker.register('sw.js').then(reg => this.swReg = reg).catch(() => {});
         }
         this.pageVisible = true;
         document.addEventListener('visibilitychange', () => {
@@ -295,16 +295,15 @@ class JSAIClient {
                     } catch (e) { if (e.message && !e.message.includes('JSON')) throw e; }
                 }
             }
-            this.streaming = false;
-            this._controller = null;
             if (this.onComplete) this.onComplete(fullText);
             log.info('AI', 'Response:', fullText.length, 'chars');
         } catch (err) {
-            this.streaming = false;
-            this._controller = null;
             if (err.name === 'AbortError') return;
             log.error('AI', 'Error:', err.message);
             if (this.onError) this.onError(err.message);
+        } finally {
+            this.streaming = false;
+            this._controller = null;
         }
     }
 
@@ -322,7 +321,10 @@ class JSAIClient {
 class ConversationStore {
     static KEY = 'jsos_ai_conversations';
     static _load() { try { return JSON.parse(localStorage.getItem(ConversationStore.KEY)) || {}; } catch { return {}; } }
-    static _save(store) { localStorage.setItem(ConversationStore.KEY, JSON.stringify(store)); }
+    static _save(store) {
+        try { localStorage.setItem(ConversationStore.KEY, JSON.stringify(store)); }
+        catch (e) { log.error('AI', 'Failed to save conversations (storage full):', e.message); }
+    }
 
     static list() {
         return Object.values(ConversationStore._load())
@@ -382,7 +384,15 @@ class JSTubeManager {
             });
             log.info('JSTUBE', 'Found', results.length, 'results');
             this.statusEl.textContent = results.length + ' results';
-        } catch (err) { log.error('JSTUBE', 'Search failed:', err.message); this.resultsEl.innerHTML = '<div class="jstube-placeholder">Search failed: ' + err.message + '</div>'; this.statusEl.textContent = 'Error'; }
+        } catch (err) {
+            log.error('JSTUBE', 'Search failed:', err.message);
+            const errDiv = document.createElement('div');
+            errDiv.className = 'jstube-placeholder';
+            errDiv.textContent = 'Search failed: ' + err.message;
+            this.resultsEl.innerHTML = '';
+            this.resultsEl.appendChild(errDiv);
+            this.statusEl.textContent = 'Error';
+        }
     }
     playVideo(video) {
         log.info('JSTUBE', 'Playing:', video.title, '[' + video.videoId + ']');
@@ -466,6 +476,8 @@ class JSChatApp extends BaseApp {
     }
 
     onClose() {
+        this.client.onDisconnect = null;
+        this.client.onError = null;
         this.client.disconnect();
         this.els.lobby.style.display = '';
         this.els.chatView.style.display = 'none';
@@ -526,8 +538,9 @@ class JSChatApp extends BaseApp {
         });
 
         this.els.roomCodeDisplay.addEventListener('click', () => {
-            navigator.clipboard.writeText(this.client.roomCode);
-            this.desktop.showToast('Room code copied!');
+            navigator.clipboard.writeText(this.client.roomCode)
+                .then(() => this.desktop.showToast('Room code copied!'))
+                .catch(() => {});
         });
 
         // Enter key shortcuts for lobby inputs
@@ -544,6 +557,7 @@ class JSChatApp extends BaseApp {
                 if (!item.type.startsWith('image/')) continue;
                 e.preventDefault();
                 const blob = item.getAsFile(); if (!blob) return;
+                if (blob.size > 10 * 1024 * 1024) { log.warn('IMAGE', 'Image too large:', blob.size, 'bytes'); this.desktop.showErrorDialog('Image is too large (max 10MB).'); return; }
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     const img = new Image();
@@ -579,13 +593,15 @@ class JSChatApp extends BaseApp {
     _createRoom() {
         const name = this.els.username.value.trim();
         if (!name) { this.els.error.textContent = 'Enter a username first'; return; }
+        if (!/^[a-zA-Z0-9_ -]{1,20}$/.test(name)) { this.els.error.textContent = 'Username must be 1-20 chars (letters, numbers, spaces, _, -)'; return; }
         this.els.error.textContent = ''; this.client.connect('create', name);
     }
     _joinRoom() {
         const name = this.els.username.value.trim();
         const code = this.els.code.value.trim().toUpperCase();
         if (!name) { this.els.error.textContent = 'Enter a username first'; return; }
-        if (!code || code.length !== 6) { this.els.error.textContent = 'Enter a valid 6-character room code'; return; }
+        if (!/^[a-zA-Z0-9_ -]{1,20}$/.test(name)) { this.els.error.textContent = 'Username must be 1-20 chars (letters, numbers, spaces, _, -)'; return; }
+        if (!code || !/^[A-Z0-9]{6}$/.test(code)) { this.els.error.textContent = 'Enter a valid 6-character room code'; return; }
         this.els.error.textContent = ''; this.client.connect('join', name, code);
     }
 
@@ -847,6 +863,9 @@ class JSAIApp extends BaseApp {
 
     onClose() {
         this._savePartial();
+        this.client.onToken = null;
+        this.client.onComplete = null;
+        this.client.onError = null;
         this.client.abort();
         this._streamingEl = null;
         this._fullText = '';
@@ -977,6 +996,8 @@ class JSCallApp extends BaseApp {
     }
 
     onClose() {
+        this.client.onDisconnect = null;
+        this.client.onError = null;
         this.client.disconnect();
         this._resetUI();
     }
@@ -994,9 +1015,18 @@ class JSCallApp extends BaseApp {
             users.forEach(u => {
                 const card = document.createElement('div');
                 card.className = 'call-user-card' + (u.muted ? ' muted' : '');
-                card.innerHTML = '<div class="call-user-avatar">' + u.username.charAt(0).toUpperCase() + '</div>' +
-                    '<div class="call-user-name">' + u.username + '</div>' +
-                    '<div class="call-user-status ' + (u.muted ? 'muted-status' : '') + '">' + (u.muted ? 'Muted' : 'Speaking') + '</div>';
+                const avatar = document.createElement('div');
+                avatar.className = 'call-user-avatar';
+                avatar.textContent = (u.username || '?').charAt(0).toUpperCase();
+                const name = document.createElement('div');
+                name.className = 'call-user-name';
+                name.textContent = u.username;
+                const status = document.createElement('div');
+                status.className = 'call-user-status' + (u.muted ? ' muted-status' : '');
+                status.textContent = u.muted ? 'Muted' : 'Speaking';
+                card.appendChild(avatar);
+                card.appendChild(name);
+                card.appendChild(status);
                 this.els.usersGrid.appendChild(card);
             });
             this.els.userCount.textContent = users.length + ' in call';
@@ -1015,8 +1045,9 @@ class JSCallApp extends BaseApp {
         });
         this.els.leaveBtn.addEventListener('click', () => { this.client.disconnect(); this._resetUI(); });
         this.els.codeDisplay.addEventListener('click', () => {
-            navigator.clipboard.writeText(this.client.roomCode);
-            this.desktop.showToast('Call code copied!');
+            navigator.clipboard.writeText(this.client.roomCode)
+                .then(() => this.desktop.showToast('Call code copied!'))
+                .catch(() => {});
         });
         this.els.code.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._joinCall(); });
         this.els.username.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !this.els.code.value) this._createCall(); });
@@ -1035,13 +1066,15 @@ class JSCallApp extends BaseApp {
     _createCall() {
         const name = this.els.username.value.trim();
         if (!name) { this.els.error.textContent = 'Enter a username first'; return; }
+        if (!/^[a-zA-Z0-9_ -]{1,20}$/.test(name)) { this.els.error.textContent = 'Username must be 1-20 chars (letters, numbers, spaces, _, -)'; return; }
         this.els.error.textContent = ''; this.client.connect('create', name);
     }
     _joinCall() {
         const name = this.els.username.value.trim();
         const code = this.els.code.value.trim().toUpperCase();
         if (!name) { this.els.error.textContent = 'Enter a username first'; return; }
-        if (!code || code.length !== 6) { this.els.error.textContent = 'Enter a valid 6-character room code'; return; }
+        if (!/^[a-zA-Z0-9_ -]{1,20}$/.test(name)) { this.els.error.textContent = 'Username must be 1-20 chars (letters, numbers, spaces, _, -)'; return; }
+        if (!code || !/^[A-Z0-9]{6}$/.test(code)) { this.els.error.textContent = 'Enter a valid 6-character room code'; return; }
         this.els.error.textContent = ''; this.client.connect('join', name, code);
     }
 }
@@ -1103,12 +1136,15 @@ class Desktop {
 
     /** Launch an app by name */
     launchApp(name) {
+        if (this._launching) return;
+        this._launching = true;
         const app = this.apps.get(name);
-        if (!app) { log.warn('DESKTOP', 'Unknown app:', name); return; }
+        if (!app) { log.warn('DESKTOP', 'Unknown app:', name); this._launching = false; return; }
         log.info('DESKTOP', 'Launching:', name);
         this.windowManager.close('explorer').then(() => {
             this.windowManager.open(name);
             app.onLaunch();
+            this._launching = false;
         });
     }
 
@@ -1125,7 +1161,8 @@ class Desktop {
     showToast(text) {
         this.toastEl.textContent = text;
         this.toastEl.classList.add('show');
-        setTimeout(() => this.toastEl.classList.remove('show'), 2000);
+        clearTimeout(this._toastTimeout);
+        this._toastTimeout = setTimeout(() => this.toastEl.classList.remove('show'), 2000);
     }
 
     /** Show a Windows-style error dialog */
@@ -1134,18 +1171,35 @@ class Desktop {
         this.sound.play('window');
         const overlay = document.createElement('div');
         overlay.className = 'error-overlay';
-        overlay.innerHTML =
-            '<div class="error-dialog">' +
-                '<div class="error-dialog-titlebar"><span>' + (window.JSOS_CONFIG?.os || 'JS OS') + ' - Error</span></div>' +
-                '<div class="error-dialog-body">' +
-                    '<div class="error-dialog-icon">&#9888;</div>' +
-                    '<div class="error-dialog-text">' + message + '</div>' +
-                '</div>' +
-                '<div class="error-dialog-buttons"><button class="error-dialog-btn">OK</button></div>' +
-            '</div>';
+        const dialog = document.createElement('div');
+        dialog.className = 'error-dialog';
+        const titlebar = document.createElement('div');
+        titlebar.className = 'error-dialog-titlebar';
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = (window.JSOS_CONFIG?.os || 'JS OS') + ' - Error';
+        titlebar.appendChild(titleSpan);
+        const body = document.createElement('div');
+        body.className = 'error-dialog-body';
+        const icon = document.createElement('div');
+        icon.className = 'error-dialog-icon';
+        icon.innerHTML = '&#9888;';
+        const textDiv = document.createElement('div');
+        textDiv.className = 'error-dialog-text';
+        textDiv.textContent = message;
+        body.appendChild(icon);
+        body.appendChild(textDiv);
+        const buttons = document.createElement('div');
+        buttons.className = 'error-dialog-buttons';
+        const btn = document.createElement('button');
+        btn.className = 'error-dialog-btn';
+        btn.textContent = 'OK';
+        buttons.appendChild(btn);
+        dialog.appendChild(titlebar);
+        dialog.appendChild(body);
+        dialog.appendChild(buttons);
+        overlay.appendChild(dialog);
         document.body.appendChild(overlay);
         const dismiss = () => { overlay.classList.add('closing'); setTimeout(() => overlay.remove(), 150); };
-        const btn = overlay.querySelector('.error-dialog-btn');
         btn.focus();
         btn.addEventListener('click', dismiss);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });

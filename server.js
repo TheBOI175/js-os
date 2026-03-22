@@ -17,6 +17,16 @@ const HEARTBEAT_MS = 30000;
 const MSG_HISTORY_CAP = 100;
 const LOG_FORMAT = process.env.LOG_FORMAT || 'pretty';
 const INSTANCE_ID = crypto.randomBytes(4).toString('hex');
+const MAX_BODY_SIZE = 1024 * 1024;          // 1MB for POST bodies
+const MAX_WS_MESSAGE = 1024 * 1024;         // 1MB for WebSocket messages
+const MAX_SIGNAL_SIZE = 100 * 1024;         // 100KB for WebRTC signal data
+const MAX_MSG_TEXT = 10000;                 // 10000 chars for chat message text
+const MAX_MSG_IMAGE = 500 * 1024;           // 500KB for chat image data URLs
+const MAX_SEARCH_QUERY = 200;              // 200 chars for JSTube search
+const MAX_ROOMS = 10000;                   // max total rooms (chat + call)
+const MAX_CODEGEN_ATTEMPTS = 100;          // max retries for generateCode()
+const USERNAME_RE = /^[a-zA-Z0-9_ -]{1,20}$/;
+const ROOM_CODE_RE = /^[A-Z2-9]{6}$/;
 
 // ─── Logger (supports pretty + JSON modes) ───
 const ANSI = {
@@ -85,7 +95,7 @@ async function initRedis() {
     redis.on('error', () => { if (redisReady) { redisReady = false; log('REDIS', 'Connection lost'); } });
     redis.on('close', () => { redisReady = false; });
 
-    redisSub.on('error', () => {});
+    redisSub.on('error', (err) => { log('REDIS', 'Subscriber error: ' + err.message); });
     redisSub.on('message', handleRedisMessage);
 
     try {
@@ -214,6 +224,18 @@ function getClientIP(req) {
     return req.socket.remoteAddress;
 }
 
+function validateUsername(name) {
+    if (!name || typeof name !== 'string') return { ok: false, error: 'Username is required' };
+    const trimmed = name.trim();
+    if (!trimmed) return { ok: false, error: 'Username is required' };
+    if (!USERNAME_RE.test(trimmed)) return { ok: false, error: 'Username must be 1-20 chars (letters, numbers, spaces, _, -)' };
+    return { ok: true, value: trimmed };
+}
+
+function safeSend(ws, data) {
+    try { if (ws.readyState === 1) ws.send(typeof data === 'string' ? data : JSON.stringify(data)); } catch {}
+}
+
 const rateLimiter = new RateLimiter();
 const connTracker = new ConnectionTracker();
 
@@ -223,36 +245,37 @@ const callRooms = new Map();
 
 function generateCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    return code;
+    for (let attempt = 0; attempt < MAX_CODEGEN_ATTEMPTS; attempt++) {
+        let code = '';
+        for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+        if (!rooms.has(code) && !callRooms.has(code)) return code;
+    }
+    return null;
 }
 
 // Username uniqueness — Redis keys with TTL (auto-expire if server crashes)
 const USERNAME_TTL = 7200; // 2 hours — refreshed by heartbeat
 
-async function isUsernameTaken(name) {
+async function tryClaimUsername(name) {
     const lower = name.toLowerCase();
     if (redisReady && redis) {
-        try { return (await redis.exists('jsos:user:' + lower)) === 1; } catch {}
+        try {
+            const result = await redis.set('jsos:user:' + lower, INSTANCE_ID, 'EX', USERNAME_TTL, 'NX');
+            return result === 'OK';
+        } catch {}
     }
+    // Fallback: local check
     for (const room of rooms.values()) {
         for (const c of room.clients) {
-            if (c.username && c.username.toLowerCase() === lower) return true;
+            if (c.username && c.username.toLowerCase() === lower) return false;
         }
     }
     for (const room of callRooms.values()) {
         for (const c of room.clients) {
-            if (c.username && c.username.toLowerCase() === lower) return true;
+            if (c.username && c.username.toLowerCase() === lower) return false;
         }
     }
-    return false;
-}
-
-async function addUsername(name) {
-    if (redisReady && redis) {
-        try { await redis.set('jsos:user:' + name.toLowerCase(), INSTANCE_ID, 'EX', USERNAME_TTL); } catch {}
-    }
+    return true;
 }
 
 async function removeUsername(name) {
@@ -275,7 +298,7 @@ async function refreshUsernameTTLs() {
             if (c.username) pipeline.expire('jsos:user:' + c.username.toLowerCase(), USERNAME_TTL);
         }
     }
-    try { await pipeline.exec(); } catch {}
+    try { await pipeline.exec(); } catch (err) { log('REDIS', 'Pipeline error: ' + err.message); }
 }
 
 // ─── HTTP Server ───
@@ -364,6 +387,11 @@ const server = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ error: 'Missing q parameter' }));
             return;
         }
+        if (query.length > MAX_SEARCH_QUERY) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Query too long' }));
+            return;
+        }
         try {
             log('JSTUBE', `Searching: ${query}`);
             const results = await youtubeSearch(query);
@@ -388,7 +416,14 @@ const server = http.createServer(async (req, res) => {
     // ─── AI Chat (streaming SSE via Gemini API) ───
     if (req.url === '/api/ai/chat' && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
+        for await (const chunk of req) {
+            body += chunk;
+            if (body.length > MAX_BODY_SIZE) {
+                res.writeHead(413, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Request body too large' }));
+                return;
+            }
+        }
         let parsed;
         try { parsed = JSON.parse(body); } catch {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -460,13 +495,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ─── Static Files ───
+    const publicDir = path.join(__dirname, 'public');
     let filePath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
-    filePath = path.join(__dirname, 'public', filePath);
+    const resolved = path.resolve(publicDir, '.' + filePath);
+    if (!resolved.startsWith(publicDir + path.sep) && resolved !== publicDir) {
+        log('HTTP', `403 ${req.method} ${req.url} (path traversal blocked)`);
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+    }
 
-    const ext = path.extname(filePath);
+    const ext = path.extname(resolved);
     const contentType = mimeTypes[ext] || 'application/octet-stream';
 
-    fs.readFile(filePath, (err, data) => {
+    fs.readFile(resolved, (err, data) => {
         if (err) {
             log('HTTP', `404 ${req.method} ${req.url}`);
             res.writeHead(404);
@@ -531,9 +573,14 @@ chatWss.on('connection', (ws) => {
     ws.on('pong', () => { ws.isAlive = true; });
 
     ws.on('message', async (data) => {
+        // Size limit
+        if (data.length > MAX_WS_MESSAGE) {
+            safeSend(ws, JSON.stringify({ type: 'error', message: 'Message too large' }));
+            return;
+        }
         // Rate limit WS messages
         if (!rateLimiter.consume(ws._clientIP, 'ws')) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Slow down! You\'re sending messages too fast.' }));
+            safeSend(ws, JSON.stringify({ type: 'error', message: 'Slow down! You\'re sending messages too fast.' }));
             return;
         }
 
@@ -541,41 +588,57 @@ chatWss.on('connection', (ws) => {
         try { msg = JSON.parse(data); } catch { return; }
 
         if (msg.type === 'create') {
-            if (await isUsernameTaken(msg.username)) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
+            const v = validateUsername(msg.username);
+            if (!v.ok) { safeSend(ws, JSON.stringify({ type: 'error', message: v.error })); return; }
+            msg.username = v.value;
+            if (rooms.size + callRooms.size >= MAX_ROOMS) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Server at room capacity. Try again later.' }));
+                return;
+            }
+            if (!(await tryClaimUsername(msg.username))) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
                 log('CHAT', `${msg.username} rejected — name already in use globally`);
                 return;
             }
-            let code = generateCode();
-            while (rooms.has(code) || callRooms.has(code)) code = generateCode();
+            const code = generateCode();
+            if (!code) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Could not create room. Try again.' }));
+                await removeUsername(msg.username);
+                return;
+            }
             rooms.set(code, { clients: new Set([ws]), messages: [] });
             ws.roomCode = code;
             ws.username = msg.username;
-            await addUsername(msg.username);
             subscribeRoom('chat', code);
-            ws.send(JSON.stringify({ type: 'joined', code }));
+            safeSend(ws, JSON.stringify({ type: 'joined', code }));
             broadcastUsers(code);
             log('CHAT', `${msg.username} created room ${code} (${rooms.size} active rooms)`);
         }
 
         else if (msg.type === 'join') {
+            const v = validateUsername(msg.username);
+            if (!v.ok) { safeSend(ws, JSON.stringify({ type: 'error', message: v.error })); return; }
+            msg.username = v.value;
             const code = (msg.code || '').toUpperCase();
+            if (!ROOM_CODE_RE.test(code)) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Invalid room code format' }));
+                return;
+            }
             const room = rooms.get(code);
             if (!room) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Room not found' }));
                 log('CHAT', `${msg.username} tried to join ${code} — not found`);
                 return;
             }
-            if (await isUsernameTaken(msg.username)) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
+            if (!(await tryClaimUsername(msg.username))) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
                 log('CHAT', `${msg.username} rejected from ${code} — name already in use globally`);
                 return;
             }
             room.clients.add(ws);
             ws.roomCode = code;
             ws.username = msg.username;
-            await addUsername(msg.username);
-            ws.send(JSON.stringify({ type: 'joined', code, history: room.messages }));
+            safeSend(ws, JSON.stringify({ type: 'joined', code, history: room.messages }));
             broadcast(code, { type: 'system', message: msg.username + ' joined the room' });
             broadcastUsers(code);
             log('CHAT', `${msg.username} joined room ${code} (${room.clients.size} users)`);
@@ -585,11 +648,25 @@ chatWss.on('connection', (ws) => {
             if (!ws.roomCode || !ws.username) return;
             const room = rooms.get(ws.roomCode);
             if (!room) return;
-            const chatMsg = { type: 'message', username: ws.username, message: msg.message, image: msg.image || null };
+            const text = (typeof msg.message === 'string') ? msg.message : '';
+            if (text.length > MAX_MSG_TEXT) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Message too long (max 10000 chars)' }));
+                return;
+            }
+            let image = null;
+            if (msg.image) {
+                if (typeof msg.image !== 'string' || msg.image.length > MAX_MSG_IMAGE) {
+                    safeSend(ws, JSON.stringify({ type: 'error', message: 'Image too large' }));
+                    return;
+                }
+                image = msg.image;
+            }
+            if (!text && !image) return;
+            const chatMsg = { type: 'message', username: ws.username, message: text, image };
             room.messages.push(chatMsg);
             if (room.messages.length > MSG_HISTORY_CAP) room.messages.shift();
             broadcast(ws.roomCode, chatMsg);
-            log('CHAT', `[${ws.roomCode}] ${ws.username}: ${msg.image ? '[image]' : msg.message}`);
+            log('CHAT', `[${ws.roomCode}] ${ws.username}: ${image ? '[image]' : text}`);
         }
     });
 
@@ -630,8 +707,12 @@ callWss.on('connection', (ws) => {
     ws.on('pong', () => { ws.isAlive = true; });
 
     ws.on('message', async (data) => {
+        if (data.length > MAX_WS_MESSAGE) {
+            safeSend(ws, JSON.stringify({ type: 'error', message: 'Message too large' }));
+            return;
+        }
         if (!rateLimiter.consume(ws._clientIP, 'ws')) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Slow down! Too many messages.' }));
+            safeSend(ws, JSON.stringify({ type: 'error', message: 'Slow down! Too many messages.' }));
             return;
         }
 
@@ -639,41 +720,57 @@ callWss.on('connection', (ws) => {
         try { msg = JSON.parse(data); } catch { return; }
 
         if (msg.type === 'create-call') {
-            if (await isUsernameTaken(msg.username)) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
+            const v = validateUsername(msg.username);
+            if (!v.ok) { safeSend(ws, JSON.stringify({ type: 'error', message: v.error })); return; }
+            msg.username = v.value;
+            if (rooms.size + callRooms.size >= MAX_ROOMS) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Server at room capacity. Try again later.' }));
+                return;
+            }
+            if (!(await tryClaimUsername(msg.username))) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
                 log('CALL', `${msg.username} rejected — name already in use globally`);
                 return;
             }
-            let code = generateCode();
-            while (rooms.has(code) || callRooms.has(code)) code = generateCode();
+            const code = generateCode();
+            if (!code) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Could not create room. Try again.' }));
+                await removeUsername(msg.username);
+                return;
+            }
             callRooms.set(code, { clients: new Set([ws]) });
             ws.callRoom = code;
             ws.username = msg.username;
-            await addUsername(msg.username);
             subscribeRoom('call', code);
-            ws.send(JSON.stringify({ type: 'call-joined', code, peerId: ws.peerId }));
+            safeSend(ws, JSON.stringify({ type: 'call-joined', code, peerId: ws.peerId }));
             broadcastCallUsers(code);
             log('CALL', `${msg.username} created call room ${code}`);
         }
 
         else if (msg.type === 'join-call') {
+            const v = validateUsername(msg.username);
+            if (!v.ok) { safeSend(ws, JSON.stringify({ type: 'error', message: v.error })); return; }
+            msg.username = v.value;
             const code = (msg.code || '').toUpperCase();
-            const room = callRooms.get(code);
-            if (!room) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Call room not found' }));
+            if (!ROOM_CODE_RE.test(code)) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Invalid room code format' }));
                 return;
             }
-            if (await isUsernameTaken(msg.username)) {
-                ws.send(JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
+            const room = callRooms.get(code);
+            if (!room) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Call room not found' }));
+                return;
+            }
+            if (!(await tryClaimUsername(msg.username))) {
+                safeSend(ws, JSON.stringify({ type: 'error', message: 'Username "' + msg.username + '" is already in use.' }));
                 return;
             }
             ws.callRoom = code;
             ws.username = msg.username;
-            await addUsername(msg.username);
 
             // Tell the new peer about all existing peers
             const existingPeers = [...room.clients].map(c => ({ peerId: c.peerId, username: c.username }));
-            ws.send(JSON.stringify({ type: 'call-joined', code, peerId: ws.peerId, peers: existingPeers }));
+            safeSend(ws, JSON.stringify({ type: 'call-joined', code, peerId: ws.peerId, peers: existingPeers }));
 
             // Tell existing peers about the new peer (local + Redis)
             const joinMsg = { type: 'peer-joined', peerId: ws.peerId, username: msg.username };
@@ -688,7 +785,9 @@ callWss.on('connection', (ws) => {
         }
 
         else if (msg.type === 'signal') {
-            // Relay WebRTC signaling to a specific peer
+            if (!ws.callRoom) return;
+            const signalStr = JSON.stringify(msg.signal || {});
+            if (signalStr.length > MAX_SIGNAL_SIZE) return;
             const room = callRooms.get(ws.callRoom);
             if (!room) return;
             const signalMsg = { type: 'signal', from: ws.peerId, signal: msg.signal };
@@ -700,7 +799,6 @@ callWss.on('connection', (ws) => {
                     break;
                 }
             }
-            // If peer not found locally, try Redis (peer might be on another instance)
             if (!found) {
                 publishToRedis('jsos:call:' + ws.callRoom, { ...signalMsg, _targetPeerId: msg.to });
             }
@@ -792,7 +890,7 @@ const heartbeat = setInterval(() => {
                 continue;
             }
             ws.isAlive = false;
-            ws.ping();
+            if (ws.readyState === 1) ws.ping();
         }
     }
     // Refresh username TTLs every 10th heartbeat (~5 min) to save Redis commands
