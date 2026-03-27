@@ -85,6 +85,7 @@ async function initRedis() {
         host: process.env.REDIS_HOST,
         port: parseInt(process.env.REDIS_PORT) || 6379,
         password: process.env.REDIS_PASSWORD || undefined,
+        tls: process.env.REDIS_TLS !== 'false' ? {} : undefined,
         lazyConnect: true,
         retryStrategy: (times) => Math.min(times * 1000, 30000),
     };
